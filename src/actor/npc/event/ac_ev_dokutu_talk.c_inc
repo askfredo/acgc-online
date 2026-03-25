@@ -1,0 +1,919 @@
+
+/* Deluxe: forward declarations for talk state machine */
+static void aEVD_talk_select_mode(EVENT_DOKUTU_ACTOR* dokutu, GAME* game);
+static void aEVD_talk_finish_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game);
+static int aEVD_check_around_monument_location(EVENT_DOKUTU_ACTOR* dokutu, GAME* game);
+
+/* Monument cost table (in bells) */
+static const u32 l_monument_cost[aMNM_TYPE_NUM] = {
+    100000, /* CLOCK */
+    50000,  /* FLOWERCLOCK */
+    100000, /* WINDMILL */
+    200000, /* FOUNTAIN */
+    100000, /* STATUE */
+    10000,  /* BENCH */
+    10000,  /* STREETLIGHT */
+    500000  /* BELL */
+};
+
+/* Monument grid sizes (in units per side) */
+static const int l_monument_grid_size[aMNM_TYPE_NUM] = {
+    3, 3, 3, 3, 2, 2, 1, 3
+};
+
+/* Deluxe: face toward player */
+static void aEVD_face_player(ACTOR* npc, ACTOR* player, int immediate) {
+  s16 target_angle;
+  f32 dx = player->world.position.x - npc->world.position.x;
+  f32 dz = player->world.position.z - npc->world.position.z;
+
+  target_angle = (s16)(atans_table(dx, dz));
+  if (immediate) {
+    npc->world.angle.y = target_angle;
+    npc->shape_info.rotation.y = target_angle;
+  } else {
+    add_calc_short_angle2(&npc->world.angle.y, target_angle,
+                          CALC_EASE(0.3f), DEG2SHORT_ANGLE(10), DEG2SHORT_ANGLE(1));
+    npc->shape_info.rotation.y = npc->world.angle.y;
+  }
+}
+
+/* Deluxe: step back from player */
+static void aEVD_backup_from_player(EVENT_DOKUTU_ACTOR* dokutu, ACTOR* player) {
+  ACTOR* npc = &dokutu->npc_class.actor_class;
+  f32 dx = npc->world.position.x - player->world.position.x;
+  f32 dz = npc->world.position.z - player->world.position.z;
+  f32 dist = dx * dx + dz * dz;
+  f32 inv_dist;
+  f32 backup_speed;
+
+  if (dist < 1.0f) {
+    return;
+  }
+
+  inv_dist = 1.0f / fsqrt(dist);
+  backup_speed = 2.0f;
+
+  if (dokutu->backup_timer > 0) {
+    dokutu->backup_timer--;
+    npc->world.position.x += dx * inv_dist * backup_speed;
+    npc->world.position.z += dz * inv_dist * backup_speed;
+    aEVD_face_player(npc, player, FALSE);
+  } else {
+    dokutu->follow_state = aEVD_FOLLOW_IDLE;
+  }
+}
+
+/* Deluxe: teleport to player when too far away */
+static void aEVD_teleport_to_player(ACTOR* npc, ACTOR* player) {
+  f32 dx = player->world.position.x - npc->world.position.x;
+  f32 dz = player->world.position.z - npc->world.position.z;
+  f32 dist = dx * dx + dz * dz;
+  f32 angle;
+  f32 offset;
+
+  if (dist < 40000.0f) {
+    return; /* Only teleport if > 200 units away */
+  }
+
+  /* Place behind player based on their facing direction */
+  angle = (f32)player->world.angle.y * (M_PI / 32768.0f);
+  offset = 40.0f;
+
+  npc->world.position.x = player->world.position.x - sin_s(player->world.angle.y) * offset;
+  npc->world.position.y = player->world.position.y;
+  npc->world.position.z = player->world.position.z - cos_s(player->world.angle.y) * offset;
+
+  /* Face toward player */
+  aEVD_face_player(npc, player, TRUE);
+}
+
+/* Deluxe: stop following the player */
+static void aEVD_stop_following_player(EVENT_DOKUTU_ACTOR* dokutu) {
+  dokutu->follow_state = aEVD_FOLLOW_IDLE;
+  dokutu->follow_timer = 0;
+}
+
+/* Deluxe: set up an action request */
+static void aEVD_set_request_act(EVENT_DOKUTU_ACTOR* dokutu, u8 action, u8 priority, s16 anim, s16 frame) {
+  dokutu->request_action = action;
+  dokutu->request_priority = priority;
+  dokutu->request_anim = anim;
+  dokutu->request_frame = frame;
+}
+
+/* Deluxe: prepare action (animation/state change) */
+static void aEVD_setupAction(EVENT_DOKUTU_ACTOR* dokutu, int action_type) {
+  dokutu->request_action = (u8)action_type;
+  dokutu->request_priority = 0;
+  dokutu->request_anim = -1;
+  dokutu->request_frame = 0;
+}
+
+/* Deluxe: follow player behavior loop */
+static void aEVD_act_follow(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  ACTOR* npc = &dokutu->npc_class.actor_class;
+  ACTOR* player = GET_PLAYER_ACTOR_GAME_ACTOR(game);
+  f32 dx;
+  f32 dz;
+  f32 dist_sq;
+  f32 dist;
+  f32 target_speed;
+  f32 move_speed;
+  s16 target_angle;
+
+  dokutu->follow_timer++;
+
+  dx = player->world.position.x - npc->world.position.x;
+  dz = player->world.position.z - npc->world.position.z;
+  dist_sq = dx * dx + dz * dz;
+
+  /* Teleport if too far */
+  if (dist_sq > 40000.0f) {
+    aEVD_teleport_to_player(npc, player);
+    return;
+  }
+
+  dist = fsqrt(dist_sq);
+
+  /* Face player direction of movement */
+  if (dist > 1.0f) {
+    target_angle = (s16)(atans_table(dx, dz));
+    add_calc_short_angle2(&npc->world.angle.y, target_angle,
+                          CALC_EASE(0.25f), DEG2SHORT_ANGLE(8), DEG2SHORT_ANGLE(0.5f));
+    npc->shape_info.rotation.y = npc->world.angle.y;
+  }
+
+  /* Move toward player if far enough */
+  if (dist > 50.0f) {
+    /* Scale speed by distance */
+    target_speed = (dist - 50.0f) * 0.05f;
+    if (target_speed > 4.0f) {
+      target_speed = 4.0f;
+    }
+    move_speed = target_speed / dist;
+    npc->world.position.x += dx * move_speed;
+    npc->world.position.z += dz * move_speed;
+  } else if (dist < 30.0f && dist > 1.0f) {
+    /* Too close - back up slightly */
+    f32 push = (30.0f - dist) * 0.02f;
+    f32 inv_dist = 1.0f / dist;
+    npc->world.position.x -= dx * inv_dist * push;
+    npc->world.position.z -= dz * inv_dist * push;
+  }
+
+  /* Match Y position smoothly */
+  add_calc2(&npc->world.position.y, player->world.position.y, 0.1f, 1.0f);
+}
+
+/* Deluxe: nudge preview position to avoid collisions */
+static void aEVD_nudge_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  ACTOR* player = GET_PLAYER_ACTOR_GAME_ACTOR(game);
+  int type = dokutu->selected_art;
+  int size;
+  f32 offset_dist;
+  xyz_t test_pos;
+  int valid;
+  int attempt;
+  s16 angle;
+  s16 angle_step;
+
+  if (type < 0 || type >= aMNM_TYPE_NUM) {
+    return;
+  }
+
+  size = l_monument_grid_size[type];
+  offset_dist = (f32)(size * 40 + 40);
+  angle = player->world.angle.y;
+  angle_step = DEG2SHORT_ANGLE(45);
+
+  /* Try 8 directions around the player */
+  for (attempt = 0; attempt < 8; attempt++) {
+    test_pos.x = player->world.position.x + sin_s(angle) * offset_dist;
+    test_pos.y = player->world.position.y;
+    test_pos.z = player->world.position.z + cos_s(angle) * offset_dist;
+
+    /* Snap to unit grid */
+    test_pos.x = ((int)(test_pos.x / 40.0f)) * 40.0f + 20.0f;
+    test_pos.z = ((int)(test_pos.z / 40.0f)) * 40.0f + 20.0f;
+
+    dokutu->preview_pos = test_pos;
+    valid = aEVD_check_around_monument_location(dokutu, game);
+
+    if (valid == TRUE) {
+      dokutu->preview_active = TRUE;
+      return;
+    }
+
+    angle += angle_step;
+  }
+
+  /* No valid position found */
+  dokutu->preview_active = FALSE;
+}
+
+/* Deluxe: initialize art preview in world */
+static void aEVD_init_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game, const xyz_t* pos) {
+  dokutu->preview_pos = *pos;
+  dokutu->preview_active = TRUE;
+  dokutu->talk_state = aEVD_TALK_SET_PREVIEW;
+}
+
+/* Deluxe: check if block coordinates are valid for monument placement */
+static int aEVD_check_block_ok(int bx, int bz) {
+  if (bx >= 1 && bx <= 5 && bz >= 1 && bz <= 4) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/* Deluxe: check if position is on a bridge */
+static int aEVD_check_bridge_unit(const xyz_t* pos) {
+  int ut_x, ut_z;
+  mActor_name_t* fg;
+
+  if (mFI_Wpos2UtNum(&ut_x, &ut_z, *pos) != FALSE) {
+    fg = mFI_UtNum2UtFG(ut_x, ut_z);
+    if (fg != NULL) {
+      mActor_name_t item = *fg;
+      if (item == RSV_BRIDGE0 || item == RSV_BRIDGE1) {
+        return TRUE;
+      }
+    }
+  }
+  return FALSE;
+}
+
+/* Deluxe: check if a unit position is valid for monument placement */
+static int aEVD_check_unit_ok(const xyz_t* pos) {
+  int bx, bz, ut_x, ut_z;
+  mActor_name_t* fg;
+
+  if (mFI_Wpos2BkandUtNuminBlock(&bx, &bz, &ut_x, &ut_z, *pos) == FALSE) {
+    return FALSE;
+  }
+
+  if (aEVD_check_block_ok(bx, bz) == FALSE) {
+    return FALSE;
+  }
+
+  if (aEVD_check_bridge_unit(pos) == TRUE) {
+    return FALSE;
+  }
+
+  fg = mFI_UtNum2UtFG(ut_x, ut_z);
+  if (fg == NULL) {
+    return FALSE;
+  }
+
+  if (*fg != EMPTY_NO) {
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+/* Deluxe: get bounding rectangle for a monument type in unit coordinates */
+static void aEVD_get_monument_bounds(EVENT_DOKUTU_ACTOR* dokutu, int type, int* min_x, int* min_z, int* max_x, int* max_z) {
+  int size = l_monument_grid_size[type];
+  int half = size / 2;
+  int ut_x, ut_z;
+
+  mFI_Wpos2UtNum(&ut_x, &ut_z, dokutu->preview_pos);
+
+  *min_x = ut_x - half;
+  *min_z = ut_z - half;
+  *max_x = ut_x + (size - half - 1);
+  *max_z = ut_z + (size - half - 1);
+}
+
+/* Deluxe: check if structures exist around the monument location */
+static int aEVD_check_structure_around_monument(const xyz_t* pos, int min_x, int min_z, int max_x, int max_z) {
+  int x, z;
+  xyz_t check_pos;
+
+  for (z = min_z; z <= max_z; z++) {
+    for (x = min_x; x <= max_x; x++) {
+      check_pos.x = (f32)(x * 40 + 20);
+      check_pos.y = pos->y;
+      check_pos.z = (f32)(z * 40 + 20);
+
+      if (aEVD_check_unit_ok(&check_pos) == FALSE) {
+        return FALSE;
+      }
+    }
+  }
+
+  return TRUE;
+}
+
+/* Deluxe: check if too many monuments exist in the block */
+static int aEVD_check_block_monument_count_over(const xyz_t* pos) {
+  int bx, bz;
+  int ut_x, ut_z;
+  int count = 0;
+  mActor_name_t* fg_top;
+
+  if (mFI_Wpos2BlockNum(&bx, &bz, *pos) == FALSE) {
+    return TRUE;
+  }
+
+  fg_top = mFI_BkNum2UtFGTop_field(bx, bz);
+  if (fg_top == NULL) {
+    return TRUE;
+  }
+
+  for (ut_z = 0; ut_z < 16; ut_z++) {
+    for (ut_x = 0; ut_x < 16; ut_x++) {
+      mActor_name_t item = fg_top[ut_z * 16 + ut_x];
+
+      if (item != EMPTY_NO && item != RSV_BRIDGE0 && item != RSV_BRIDGE1) {
+        count++;
+      }
+    }
+  }
+
+  return (count >= 32) ? TRUE : FALSE;
+}
+
+/* Deluxe: comprehensive monument placement validation */
+static int aEVD_check_around_monument_location(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  int type = dokutu->selected_art;
+  int min_x, min_z, max_x, max_z;
+  int bx, bz;
+  int x, z;
+  xyz_t check_pos;
+
+  if (type < 0 || type >= aMNM_TYPE_NUM) {
+    return FALSE;
+  }
+
+  /* Check base position is in a valid block */
+  if (mFI_Wpos2BlockNum(&bx, &bz, dokutu->preview_pos) == FALSE) {
+    return FALSE;
+  }
+
+  if (aEVD_check_block_ok(bx, bz) == FALSE) {
+    return FALSE;
+  }
+
+  /* Check monument count limit */
+  if (aEVD_check_block_monument_count_over(&dokutu->preview_pos) == TRUE) {
+    return FALSE;
+  }
+
+  /* Get monument bounds */
+  aEVD_get_monument_bounds(dokutu, type, &min_x, &min_z, &max_x, &max_z);
+
+  /* Check all units within the monument footprint */
+  for (z = min_z; z <= max_z; z++) {
+    for (x = min_x; x <= max_x; x++) {
+      check_pos.x = (f32)(x * 40 + 20);
+      check_pos.y = dokutu->preview_pos.y;
+      check_pos.z = (f32)(z * 40 + 20);
+
+      if (aEVD_check_unit_ok(&check_pos) == FALSE) {
+        return FALSE;
+      }
+    }
+  }
+
+  /* Check surrounding units (one unit border) */
+  if (aEVD_check_structure_around_monument(&dokutu->preview_pos,
+      min_x - 1, min_z - 1, max_x + 1, max_z + 1) == FALSE) {
+    /* Structures nearby but not overlapping - still allow placement */
+  }
+
+  /* Check no bridges in the area */
+  for (z = min_z; z <= max_z; z++) {
+    for (x = min_x; x <= max_x; x++) {
+      check_pos.x = (f32)(x * 40 + 20);
+      check_pos.y = dokutu->preview_pos.y;
+      check_pos.z = (f32)(z * 40 + 20);
+
+      if (aEVD_check_bridge_unit(&check_pos) == TRUE) {
+        return FALSE;
+      }
+    }
+  }
+
+  return TRUE;
+}
+
+/* Deluxe: update monument preview position based on player facing */
+static void aEVD_update_monument_preview_state(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  ACTOR* player = GET_PLAYER_ACTOR_GAME_ACTOR(game);
+  int type = dokutu->selected_art;
+  int size;
+  f32 offset_x, offset_z;
+  xyz_t preview;
+
+  if (type < 0 || type >= aMNM_TYPE_NUM) {
+    dokutu->preview_active = FALSE;
+    return;
+  }
+
+  size = l_monument_grid_size[type];
+
+  /* Calculate position in front of player */
+  offset_x = sin_s(player->world.angle.y) * (f32)(size * 40 + 40);
+  offset_z = cos_s(player->world.angle.y) * (f32)(size * 40 + 40);
+
+  preview.x = player->world.position.x + offset_x;
+  preview.y = player->world.position.y;
+  preview.z = player->world.position.z + offset_z;
+
+  /* Snap to unit grid */
+  preview.x = ((int)(preview.x / 40.0f)) * 40.0f + 20.0f;
+  preview.z = ((int)(preview.z / 40.0f)) * 40.0f + 20.0f;
+
+  dokutu->preview_pos = preview;
+
+  /* Validate placement */
+  dokutu->preview_active = aEVD_check_around_monument_location(dokutu, game);
+}
+
+/* Deluxe: draw monument placement outline on the ground */
+static void aEVD_draw_monument_outline(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  int type = dokutu->selected_art;
+  int min_x, min_z, max_x, max_z;
+  int x, z;
+  u8 r, g, b;
+
+  if (type < 0 || type >= aMNM_TYPE_NUM) {
+    return;
+  }
+
+  if (dokutu->preview_active == FALSE) {
+    return;
+  }
+
+  aEVD_get_monument_bounds(dokutu, type, &min_x, &min_z, &max_x, &max_z);
+
+  /* Green if valid, red if invalid */
+  if (aEVD_check_around_monument_location(dokutu, game) == TRUE) {
+    r = 0; g = 200; b = 0;
+  } else {
+    r = 200; g = 0; b = 0;
+  }
+
+  /* Draw outline for each unit in the monument footprint */
+  for (z = min_z; z <= max_z; z++) {
+    for (x = min_x; x <= max_x; x++) {
+      f32 wx = (f32)(x * 40 + 20);
+      f32 wz = (f32)(z * 40 + 20);
+
+      Debug_Display_new(
+        wx, dokutu->preview_pos.y + 1.0f, wz,
+        0, 0, 0,
+        20.0f, 1.0f, 20.0f,
+        r, g, b, 128,
+        0,
+        (GRAPH*)game
+      );
+    }
+  }
+}
+
+/* Deluxe: check for monument removal during follow mode */
+static void aEVD_act_follow_check_remove_monument(EVENT_DOKUTU_ACTOR* dokutu, GAME* game, PLAYER_ACTOR* player) {
+  ACTOR* player_actor = (ACTOR*)player;
+  ACTOR* npc = &dokutu->npc_class.actor_class;
+  f32 dx = player_actor->world.position.x - npc->world.position.x;
+  f32 dz = player_actor->world.position.z - npc->world.position.z;
+  f32 dist_sq = dx * dx + dz * dz;
+  int ut_x, ut_z;
+  mActor_name_t* fg;
+
+  /* Only check if close enough */
+  if (dist_sq > 10000.0f) {
+    return;
+  }
+
+  /* Check the unit the player is standing on */
+  if (mFI_Wpos2UtNum(&ut_x, &ut_z, player_actor->world.position) == FALSE) {
+    return;
+  }
+
+  /* Check surrounding units for monuments */
+  {
+    int check_x, check_z;
+    for (check_z = ut_z - 2; check_z <= ut_z + 2; check_z++) {
+      for (check_x = ut_x - 2; check_x <= ut_x + 2; check_x++) {
+        fg = mFI_UtNum2UtFG(check_x, check_z);
+        if (fg != NULL && *fg != EMPTY_NO && *fg != RSV_BRIDGE0 && *fg != RSV_BRIDGE1) {
+          /* Found a potential monument - face it and offer removal */
+          dokutu->preview_pos.x = (f32)(check_x * 40 + 20);
+          dokutu->preview_pos.y = player_actor->world.position.y;
+          dokutu->preview_pos.z = (f32)(check_z * 40 + 20);
+          return;
+        }
+      }
+    }
+  }
+}
+
+/* Deluxe: set monument choice menu strings */
+static void aEVD_talk_set_monument_choices(EVENT_DOKUTU_ACTOR* dokutu) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+  int i;
+
+  for (i = 0; i < aMNM_TYPE_NUM && i < 6; i++) {
+    u8 name_buf[32];
+    int len;
+
+    /* Set monument name as choice string */
+    name_buf[0] = (u8)(0x87 + i);
+    name_buf[1] = 0;
+    len = 2;
+
+    mMsg_Set_free_str(msg_p, i, name_buf, len);
+  }
+}
+
+/* Deluxe: select mode - art preview, monument place/remove, or goodbye */
+static void aEVD_talk_select_mode(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int choice = mChoice_GET_CHOSENUM();
+    mChoice_CLEAR_CHOSENUM();
+
+    switch (choice) {
+      case 0:
+        /* Preview art */
+        dokutu->talk_state = aEVD_TALK_SET_PREVIEW;
+        mMsg_Set_continue_msg_num(msg_p, 0x3148);
+        break;
+      case 1:
+        /* Place monument */
+        dokutu->talk_state = aEVD_TALK_SELECT_MONUMENT;
+        mMsg_Set_continue_msg_num(msg_p, 0x3150);
+        aEVD_talk_set_monument_choices(dokutu);
+        break;
+      case 2:
+        /* Remove monument */
+        dokutu->talk_state = aEVD_TALK_REMOVE_MONUMENT_TALK;
+        mMsg_Set_continue_msg_num(msg_p, 0x3154);
+        break;
+      default:
+        /* Goodbye */
+        dokutu->talk_state = aEVD_TALK_GOODBYE;
+        mMsg_Set_continue_msg_num(msg_p, 0x314C);
+        break;
+    }
+  }
+}
+
+/* Deluxe: select which monument type to place */
+static void aEVD_talk_select_monument(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int choice = mChoice_GET_CHOSENUM();
+    mChoice_CLEAR_CHOSENUM();
+
+    if (choice >= 0 && choice < aMNM_TYPE_NUM) {
+      u32 cost = l_monument_cost[choice];
+
+      dokutu->selected_art = (s16)choice;
+
+      if (mPr_GetPossessionBells() >= cost) {
+        /* Can afford - start placement preview */
+        aEVD_update_monument_preview_state(dokutu, game);
+        dokutu->talk_state = aEVD_TALK_SHOW_PREVIEW;
+        mMsg_Set_continue_msg_num(msg_p, 0x3149);
+      } else {
+        /* Can't afford */
+        dokutu->talk_state = aEVD_TALK_CANT_AFFORD;
+        mMsg_Set_continue_msg_num(msg_p, 0x314A);
+      }
+    } else {
+      /* Cancelled */
+      dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+      mMsg_Set_continue_msg_num(msg_p, 0x3147);
+    }
+  }
+}
+
+/* Deluxe: set up art preview display */
+static void aEVD_talk_set_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  ACTOR* player = GET_PLAYER_ACTOR_GAME_ACTOR(game);
+  xyz_t preview_pos;
+
+  preview_pos.x = player->world.position.x + sin_s(player->world.angle.y) * 60.0f;
+  preview_pos.y = player->world.position.y;
+  preview_pos.z = player->world.position.z + cos_s(player->world.angle.y) * 60.0f;
+
+  aEVD_init_preview(dokutu, game, &preview_pos);
+}
+
+/* Deluxe: show art preview and wait for player reaction */
+static void aEVD_talk_show_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  /* Update monument outline if in monument mode */
+  if (dokutu->selected_art >= 0 && dokutu->selected_art < aMNM_TYPE_NUM) {
+    aEVD_update_monument_preview_state(dokutu, game);
+  }
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int choice = mChoice_GET_CHOSENUM();
+    mChoice_CLEAR_CHOSENUM();
+
+    if (choice == 0) {
+      /* Player wants to buy/place */
+      dokutu->talk_state = aEVD_TALK_WAIT_PREVIEW;
+      mMsg_Set_continue_msg_num(msg_p, 0x314B);
+    } else {
+      /* Player declines */
+      dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+      dokutu->preview_active = FALSE;
+      mMsg_Set_continue_msg_num(msg_p, 0x3147);
+    }
+  }
+}
+
+/* Deluxe: wait for confirmation before purchase/placement */
+static void aEVD_talk_wait_preview_ok(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int choice = mChoice_GET_CHOSENUM();
+    mChoice_CLEAR_CHOSENUM();
+
+    if (choice == 0) {
+      /* Confirmed - check if valid placement for monuments */
+      if (dokutu->selected_art >= 0 && dokutu->selected_art < aMNM_TYPE_NUM) {
+        if (dokutu->preview_active == TRUE) {
+          dokutu->talk_state = aEVD_TALK_BELLS_HANDOVER;
+          mMsg_Set_continue_msg_num(msg_p, 0x314E);
+        } else {
+          /* Invalid location */
+          mMsg_Set_continue_msg_num(msg_p, 0x314F);
+          dokutu->talk_state = aEVD_TALK_SHOW_PREVIEW;
+        }
+      } else {
+        /* Art purchase */
+        dokutu->talk_state = aEVD_TALK_BELLS_HANDOVER;
+        mMsg_Set_continue_msg_num(msg_p, 0x314E);
+      }
+    } else {
+      dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+      dokutu->preview_active = FALSE;
+      mMsg_Set_continue_msg_num(msg_p, 0x3147);
+    }
+  }
+}
+
+/* Deluxe: finish preview - finalize placement or decline */
+static void aEVD_talk_finish_preview(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int type = dokutu->selected_art;
+
+    if (type >= 0 && type < aMNM_TYPE_NUM) {
+      /* Monument placement - place item in field */
+      int min_x, min_z, max_x, max_z;
+      int x, z;
+
+      aEVD_get_monument_bounds(dokutu, type, &min_x, &min_z, &max_x, &max_z);
+
+      for (z = min_z; z <= max_z; z++) {
+        for (x = min_x; x <= max_x; x++) {
+          xyz_t place_pos;
+          place_pos.x = (f32)(x * 40 + 20);
+          place_pos.y = dokutu->preview_pos.y;
+          place_pos.z = (f32)(z * 40 + 20);
+          mFI_SetFG_common(EMPTY_NO + 1 + type, place_pos, TRUE);
+        }
+      }
+    }
+
+    dokutu->preview_active = FALSE;
+    dokutu->selected_art = -1;
+    dokutu->talk_state = aEVD_TALK_GOODBYE;
+    mMsg_Set_continue_msg_num(msg_p, 0x314C);
+  }
+}
+
+/* Deluxe: monument removal confirmation dialogue */
+static void aEVD_talk_remove_monument_talk(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    int choice = mChoice_GET_CHOSENUM();
+    mChoice_CLEAR_CHOSENUM();
+
+    if (choice == 0) {
+      /* Confirm removal */
+      dokutu->talk_state = aEVD_TALK_REMOVE_MONUMENT;
+      mMsg_Set_continue_msg_num(msg_p, 0x3151);
+    } else {
+      /* Cancel */
+      dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+      mMsg_Set_continue_msg_num(msg_p, 0x3147);
+    }
+  }
+}
+
+/* Deluxe: remove the monument at preview position */
+static void aEVD_talk_remove_monument(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    /* Clear the monument from the field */
+    int ut_x, ut_z;
+    int check_x, check_z;
+
+    if (mFI_Wpos2UtNum(&ut_x, &ut_z, dokutu->preview_pos) != FALSE) {
+      /* Clear a 3x3 area around the monument center */
+      for (check_z = ut_z - 1; check_z <= ut_z + 1; check_z++) {
+        for (check_x = ut_x - 1; check_x <= ut_x + 1; check_x++) {
+          mActor_name_t* fg = mFI_UtNum2UtFG(check_x, check_z);
+          if (fg != NULL && *fg != EMPTY_NO && *fg != RSV_BRIDGE0 && *fg != RSV_BRIDGE1) {
+            xyz_t clear_pos;
+            clear_pos.x = (f32)(check_x * 40 + 20);
+            clear_pos.y = dokutu->preview_pos.y;
+            clear_pos.z = (f32)(check_z * 40 + 20);
+            mFI_SetFG_common(EMPTY_NO, clear_pos, TRUE);
+          }
+        }
+      }
+    }
+
+    dokutu->preview_active = FALSE;
+    dokutu->talk_state = aEVD_TALK_GOODBYE;
+    mMsg_Set_continue_msg_num(msg_p, 0x314C);
+  }
+}
+
+/* Deluxe: player can't afford the item */
+static void aEVD_talk_cant_afford(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    dokutu->preview_active = FALSE;
+    dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+    mMsg_Set_continue_msg_num(msg_p, 0x3147);
+  }
+}
+
+/* Deluxe: start bells handover transaction */
+static void aEVD_talk_start_bells_handover(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+  int type = dokutu->selected_art;
+  u32 cost;
+
+  if (type >= 0 && type < aMNM_TYPE_NUM) {
+    cost = l_monument_cost[type];
+  } else {
+    cost = 0;
+  }
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    mPr_TakePossessionBellsNew(cost);
+    dokutu->talk_state = aEVD_TALK_PUTAWAY_BELLS;
+    mMsg_Set_continue_msg_num(msg_p, 0x314E);
+  }
+}
+
+/* Deluxe: dokutu puts away the bells */
+static void aEVD_talk_putaway_bells(EVENT_DOKUTU_ACTOR* dokutu, GAME* game) {
+  mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+  if (mMsg_Check_MainNormalContinue(msg_p) == TRUE) {
+    dokutu->talk_state = aEVD_TALK_FINISH_PREVIEW;
+    mMsg_Set_continue_msg_num(msg_p, 0x314E);
+  }
+}
+
+/* Deluxe: set talk info based on following state */
+static void aEVD_set_talk_info_following(EVENT_DOKUTU_ACTOR* dokutu, int* msg_no, int* msg_type) {
+  switch (dokutu->talk_state) {
+    case aEVD_TALK_GREETING:
+      *msg_no = 0x3146;
+      break;
+    case aEVD_TALK_SELECT_MODE:
+      *msg_no = 0x3147;
+      break;
+    case aEVD_TALK_SET_PREVIEW:
+      *msg_no = 0x3148;
+      break;
+    case aEVD_TALK_SHOW_PREVIEW:
+      *msg_no = 0x3149;
+      break;
+    case aEVD_TALK_WAIT_PREVIEW:
+      *msg_no = 0x314B;
+      break;
+    case aEVD_TALK_CANT_AFFORD:
+      *msg_no = 0x314A;
+      break;
+    case aEVD_TALK_BELLS_HANDOVER:
+      *msg_no = 0x314E;
+      break;
+    case aEVD_TALK_GOODBYE:
+      *msg_no = 0x314C;
+      break;
+    case aEVD_TALK_SELECT_MONUMENT:
+      *msg_no = 0x3150;
+      break;
+    case aEVD_TALK_REMOVE_MONUMENT_TALK:
+      *msg_no = 0x3154;
+      break;
+    case aEVD_TALK_REMOVE_MONUMENT:
+      *msg_no = 0x3151;
+      break;
+    default:
+      *msg_no = 0x3146;
+      break;
+  }
+}
+
+/* Deluxe: enhanced set_talk_info with state machine */
+static void aEVD_set_talk_info(ACTOR* actorx) {
+  EVENT_DOKUTU_ACTOR* dokutu = (EVENT_DOKUTU_ACTOR*)actorx;
+  int msg_no = 0x3146;
+  int msg_type = 0;
+
+  aEVD_set_talk_info_following(dokutu, &msg_no, &msg_type);
+  mDemo_Set_msg_num(msg_no);
+}
+
+static void aEVD_talk_request(ACTOR* actorx, GAME* game) {
+  mDemo_Request(mDemo_TYPE_TALK, actorx, &aEVD_set_talk_info);
+}
+
+static int aEVD_talk_init(ACTOR* actorx, GAME* game) {
+  EVENT_DOKUTU_ACTOR* dokutu = (EVENT_DOKUTU_ACTOR*)actorx;
+
+  mDemo_Set_ListenAble();
+
+  /* Deluxe: start following player on first talk */
+  if (dokutu->follow_state == aEVD_FOLLOW_IDLE) {
+    dokutu->follow_state = aEVD_FOLLOW_ACTIVE;
+    dokutu->follow_timer = 0;
+    dokutu->talk_state = aEVD_TALK_GREETING;
+  }
+
+  return TRUE;
+}
+
+static int aEVD_talk_end_chk(ACTOR* actorx, GAME* game) {
+  EVENT_DOKUTU_ACTOR* dokutu = (EVENT_DOKUTU_ACTOR*)actorx;
+  int res = FALSE;
+
+  if (mDemo_Check(mDemo_TYPE_TALK, actorx) == FALSE) {
+    /* Deluxe: advance talk state machine */
+    switch (dokutu->talk_state) {
+      case aEVD_TALK_GREETING:
+        dokutu->talk_state = aEVD_TALK_SELECT_MODE;
+        break;
+      case aEVD_TALK_SELECT_MODE:
+        aEVD_talk_select_mode(dokutu, game);
+        break;
+      case aEVD_TALK_SET_PREVIEW:
+        aEVD_talk_set_preview(dokutu, game);
+        break;
+      case aEVD_TALK_SHOW_PREVIEW:
+        aEVD_talk_show_preview(dokutu, game);
+        break;
+      case aEVD_TALK_WAIT_PREVIEW:
+        aEVD_talk_wait_preview_ok(dokutu, game);
+        break;
+      case aEVD_TALK_CANT_AFFORD:
+        aEVD_talk_cant_afford(dokutu, game);
+        break;
+      case aEVD_TALK_BELLS_HANDOVER:
+        aEVD_talk_start_bells_handover(dokutu, game);
+        break;
+      case aEVD_TALK_PUTAWAY_BELLS:
+        aEVD_talk_putaway_bells(dokutu, game);
+        break;
+      case aEVD_TALK_SELECT_MONUMENT:
+        aEVD_talk_select_monument(dokutu, game);
+        break;
+      case aEVD_TALK_REMOVE_MONUMENT_TALK:
+        aEVD_talk_remove_monument_talk(dokutu, game);
+        break;
+      case aEVD_TALK_REMOVE_MONUMENT:
+        aEVD_talk_remove_monument(dokutu, game);
+        break;
+      case aEVD_TALK_FINISH_PREVIEW:
+        aEVD_talk_finish_preview(dokutu, game);
+        break;
+      case aEVD_TALK_GOODBYE:
+        aEVD_stop_following_player(dokutu);
+        dokutu->preview_active = FALSE;
+        dokutu->talk_state = aEVD_TALK_GREETING;
+        res = TRUE;
+        break;
+      default:
+        res = TRUE;
+        break;
+    }
+  }
+
+  return res;
+}

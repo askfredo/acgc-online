@@ -1,0 +1,64 @@
+# IDE folders
+.idea/
+.vs/
+.vscode/*
+
+# Caches
+__pycache__
+.mypy_cache
+.cache/
+
+# Original files
+orig/*/*
+!orig/*/.gitkeep
+*.dol
+*.rel
+*.elf
+*.o
+*.obj
+*.map
+*.MAP
+
+# Build files
+build/
+build32/
+build-linux/
+build-windows/
+pc/build32/
+.ninja_*
+build.ninja
+
+# ROM images (user-provided)
+rom/*.iso
+rom/*.gcm
+rom/*.ciso
+
+# decompctx output
+ctx.*
+*.ctx
+
+# Generated configs
+objdiff.json
+compile_commands.json
+
+# Miscellaneous
+/*.txt
+!requirements.txt
+*.exe
+*.dll
+
+# For saving work files into (like IDB)
+temp/
+
+# Runtime user files
+settings.ini
+keybindings.ini
+save/
+
+# Ignore the N64 SDK headers since we download them
+# NOTE: include/PR/gbi.h and include/PR/ultratypes.h are force-tracked
+# (git add -f) because they have TARGET_PC modifications for LE bitfields.
+# configure.py skips download when they already exist.
+include/PR/
+include/gcc/
+include/compiler/gcc/stdlib.h

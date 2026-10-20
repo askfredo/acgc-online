@@ -4,6 +4,7 @@
 #endif
 #include "pc_cloud.h"
 #include "pc_http.h"
+#include "pc_net.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -606,6 +607,23 @@ static int pc_cloud_lock_call(const char* method, const char* suffix, PcHttpResp
     return pc_cloud_call(method, path, s_lock_id[0] ? extra : NULL, NULL, 0, resp);
 }
 
+/* Live play through the town server: as host of the town being played (so friends can
+ * join), or as guest of whoever is hosting it. */
+static void pc_cloud_use_relay(int mode) {
+    char url[512];
+    char auth[192];
+    char lock[96];
+
+    if (g_pc_net_mode != PC_NET_MODE_OFF && g_pc_net_mode != mode) {
+        return; /* a direct --host/--join session was asked for */
+    }
+    snprintf(url, sizeof(url), "%s/api/v1/towns/%s/live?role=%s", s_server, g_pc_cloud_town,
+             mode == PC_NET_MODE_HOST ? "host" : "guest");
+    snprintf(auth, sizeof(auth), "Authorization: Bearer %s", s_token);
+    snprintf(lock, sizeof(lock), "X-Lock-Id: %s", s_lock_id);
+    pc_net_use_relay(mode, url, auth, mode == PC_NET_MODE_HOST ? lock : NULL);
+}
+
 /* After taking the lock: local copy of the town and the upload/renew worker. */
 static void pc_cloud_open_session(void) {
     extern int pc_cloud_worker(void* arg);
@@ -618,6 +636,7 @@ static void pc_cloud_open_session(void) {
     s_mutex = SDL_CreateMutex();
     s_cond = SDL_CreateCond();
     s_worker = SDL_CreateThread(pc_cloud_worker, "cloud", NULL);
+    pc_cloud_use_relay(PC_NET_MODE_HOST);
 }
 
 /* Cryptographically secure random bytes from the OS (the account password depends on it). */
@@ -824,6 +843,7 @@ int pc_cloud_world(PcWorldTown* out, int max, char* err, int err_size) {
             pc_json_get_str(p, "name", t->name, sizeof(t->name));
             t->residents = pc_json_get_int(p, "residents");
             t->free_slots = pc_json_get_int(p, "free_slots");
+            t->players = pc_json_get_int(p, "players");
             v = pc_json_get(p, "playing");
             t->playing = v != NULL && strncmp(v, "true", 4) == 0;
             v = pc_json_get(p, "mine");
@@ -911,11 +931,16 @@ void pc_cloud_start(void) {
     /* Become the host of the town. */
     pc_cloud_lock_call("POST", "", &resp);
     if (resp.status == 409) {
+        /* Someone is playing it: join their game live. Their save is the town; this
+         * resident's progress goes to them (the guest never uploads). */
         char host[64] = "?";
+
         pc_cloud_json_str((const char*)resp.body, "host", host, sizeof(host));
-        snprintf(msg, sizeof(msg),
-                 "%s esta jugando este pueblo ahora.\nPara jugar juntos, unete a su partida (--join).", host);
-        pc_cloud_fail(msg);
+        pc_http_free(&resp);
+        printf("[Cloud] %s is playing town %s: joining live\n", host, g_pc_cloud_town);
+        pc_cloud_use_relay(PC_NET_MODE_JOIN);
+        g_pc_cloud_mode = 0;
+        return;
     }
     if (resp.status != 200 || !pc_cloud_json_str((const char*)resp.body, "lock_id", s_lock_id, sizeof(s_lock_id))) {
         snprintf(msg, sizeof(msg), "No se pudo abrir el pueblo: %s", pc_cloud_error_text(&resp, err, sizeof(err)));
@@ -980,6 +1005,7 @@ static int pc_cloud_reclaim_lock(void) {
     if (resp.status == 200 && pc_cloud_json_str((const char*)resp.body, "lock_id", s_lock_id, sizeof(s_lock_id))) {
         pc_http_free(&resp);
         printf("[Cloud] took the town lock back\n");
+        pc_cloud_use_relay(PC_NET_MODE_HOST); /* the relay needs the new lock */
         return 1;
     }
     pc_http_free(&resp);

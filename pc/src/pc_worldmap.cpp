@@ -136,7 +136,7 @@ void draw_island(ImDrawList* dl, ImVec2 c, float r, const PcWorldTown& t, int in
         dl->AddTriangleFilled(ImVec2(p.x - s * 1.4f, p.y - s * 0.4f), ImVec2(p.x + s * 1.4f, p.y - s * 0.4f),
                               ImVec2(p.x, p.y - s * 1.6f), rgba(205, 80, 60));
     }
-    if (t.playing) {
+    if (t.playing || t.players > 0) {
         float pulse = 0.5f + 0.5f * sinf(g_map.time * 4.0f);
         dl->AddCircle(c, r * (1.25f + 0.08f * pulse), rgba(255, 245, 140, (int)(120 + 100 * pulse)), 32, 3.0f);
     }
@@ -179,8 +179,14 @@ void draw_card(ImDrawList* dl, ImVec2 a, ImVec2 b) {
     c.y += 28;
     text_centered(dl, 17.0f, c, rgba(120, 96, 70), line);
     c.y += 22;
-    text_centered(dl, 17.0f, c, t.playing ? rgba(70, 140, 60) : rgba(150, 130, 110),
-                  t.mine ? "You live here" : (t.playing ? "Someone is playing there now" : "Nobody's around right now"));
+    if (t.players > 0) {
+        snprintf(line, sizeof(line), "%d playing now%s", t.players, t.mine ? "  -  you live here" : "");
+    } else if (t.playing) {
+        snprintf(line, sizeof(line), "Someone is playing now%s", t.mine ? "  -  you live here" : "");
+    } else {
+        snprintf(line, sizeof(line), "%s", t.mine ? "You live here  -  nobody's around" : "Nobody's around right now");
+    }
+    text_centered(dl, 17.0f, c, (t.players > 0 || t.playing) ? rgba(70, 140, 60) : rgba(150, 130, 110), line);
 }
 
 } // namespace

@@ -1,5 +1,6 @@
 /* pc_net.c - netplay TCP transport (see pc_net.h) */
 #include "pc_net.h"
+#include "pc_http.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +59,23 @@ static int s_booting = 0; /* guest: capture SAVE into s_boot_save instead of dis
 static uint8_t* s_boot_save = NULL;
 static uint32_t s_boot_save_size = 0;
 
+/* Live play through the town server: the same stream, carried by a WebSocket. */
+#define PC_NET_RELAY_RETRY_MS 5000
+static int s_relay = 0;
+static PcWs* s_ws = NULL;
+static int s_relay_peer = 0; /* host: a guest is connected */
+static uint32_t s_relay_retry_at = 0;
+static char s_relay_url[512];
+static char s_relay_hdr[2][256];
+
+/* Is there someone on the other end to talk to? */
+static int pc_net_link_up(void) {
+    if (s_relay) {
+        return s_ws != NULL && (g_pc_net_mode == PC_NET_MODE_JOIN || s_relay_peer);
+    }
+    return s_conn != PC_SOCK_INVALID;
+}
+
 static int pc_net_buf_reserve(PcNetBuf* b, uint32_t extra) {
     if (b->len + extra > b->cap) {
         uint32_t cap = b->cap ? b->cap : 4096;
@@ -98,12 +116,20 @@ static void pc_net_tune_conn(pc_sock_t s) {
 }
 
 static void pc_net_drop_conn(const char* why) {
-    if (s_conn == PC_SOCK_INVALID) {
+    if (!pc_net_link_up()) {
         return;
     }
     printf("[Net] connection closed (%s)\n", why);
-    pc_sock_close(s_conn);
-    s_conn = PC_SOCK_INVALID;
+    if (s_relay) {
+        if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+            pc_ws_close(s_ws);
+            s_ws = NULL;
+        }
+        s_relay_peer = 0; /* the host keeps its relay connection for the next guest */
+    } else {
+        pc_sock_close(s_conn);
+        s_conn = PC_SOCK_INVALID;
+    }
     s_in.len = 0;
     s_out.len = 0;
     if (!s_booting) {
@@ -120,13 +146,56 @@ void pc_net_sleep_ms(int ms) {
 }
 
 int pc_net_connected(void) {
-    return s_conn != PC_SOCK_INVALID;
+    return pc_net_link_up();
+}
+
+void pc_net_use_relay(int mode, const char* url, const char* header1, const char* header2) {
+    g_pc_net_mode = mode;
+    s_relay = 1;
+    snprintf(s_relay_url, sizeof(s_relay_url), "%s", url);
+    snprintf(s_relay_hdr[0], sizeof(s_relay_hdr[0]), "%s", header1 ? header1 : "");
+    snprintf(s_relay_hdr[1], sizeof(s_relay_hdr[1]), "%s", header2 ? header2 : "");
+}
+
+/* Relay messages: binary is the game's stream, text is the relay telling the host about
+ * its guest. */
+static void pc_net_ws_message(int op, const uint8_t* data, uint32_t len, void* user) {
+    (void)user;
+    if (op == PC_WS_BINARY) {
+        if (pc_net_link_up() && pc_net_buf_reserve(&s_in, len)) {
+            memcpy(s_in.data + s_in.len, data, len);
+            s_in.len += len;
+        }
+    } else if (len == 12 && memcmp(data, "guest-joined", 12) == 0) {
+        s_relay_peer = 1;
+        s_in.len = 0;
+        s_out.len = 0;
+        printf("[Net] a guest joined through the server\n");
+        mNtp_on_connect();
+    } else if (len == 10 && memcmp(data, "guest-left", 10) == 0) {
+        pc_net_drop_conn("guest left");
+    }
+}
+
+static int pc_net_relay_connect(char* err, int err_size) {
+    const char* headers[3];
+    int n = 0;
+
+    if (s_relay_hdr[0][0] != '\0') {
+        headers[n++] = s_relay_hdr[0];
+    }
+    if (s_relay_hdr[1][0] != '\0') {
+        headers[n++] = s_relay_hdr[1];
+    }
+    headers[n] = NULL;
+    s_ws = pc_ws_connect(s_relay_url, headers, err, err_size);
+    return s_ws != NULL;
 }
 
 int pc_net_send(int type, const void* data, uint32_t len) {
     PcNetHeader hdr;
 
-    if (s_conn == PC_SOCK_INVALID || len > PC_NET_MAX_MSG) {
+    if (!pc_net_link_up() || len > PC_NET_MAX_MSG) {
         return 0;
     }
     if (!pc_net_buf_reserve(&s_out, sizeof(hdr) + len)) {
@@ -144,6 +213,16 @@ int pc_net_send(int type, const void* data, uint32_t len) {
 }
 
 static void pc_net_flush(void) {
+    if (s_relay) {
+        if (s_ws != NULL && s_out.len > 0 && pc_net_link_up()) {
+            pc_ws_send(s_ws, s_out.data, s_out.len);
+            s_out.len = 0;
+        }
+        if (s_ws != NULL) {
+            pc_ws_poll(s_ws, pc_net_ws_message, NULL); /* writes it out */
+        }
+        return;
+    }
     while (s_conn != PC_SOCK_INVALID && s_out.len > 0) {
         int n = (int)send(s_conn, (const char*)s_out.data, (int)s_out.len, 0);
 
@@ -158,7 +237,7 @@ static void pc_net_flush(void) {
 }
 
 static void pc_net_dispatch(void) {
-    while (s_conn != PC_SOCK_INVALID && s_in.len >= sizeof(PcNetHeader)) {
+    while (pc_net_link_up() && s_in.len >= sizeof(PcNetHeader)) {
         PcNetHeader hdr;
 
         memcpy(&hdr, s_in.data, sizeof(hdr));
@@ -184,7 +263,45 @@ static void pc_net_dispatch(void) {
     }
 }
 
+static void pc_net_receive_relay(void) {
+    if (s_ws == NULL) {
+        /* Host: (re)connect to the relay so friends can join, retrying now and then. */
+        if (g_pc_net_mode == PC_NET_MODE_HOST && SDL_GetTicks() >= s_relay_retry_at) {
+            char err[160];
+
+            if (pc_net_relay_connect(err, sizeof(err))) {
+                printf("[Net] live on the town server: friends can join\n");
+            } else {
+                s_relay_retry_at = SDL_GetTicks() + PC_NET_RELAY_RETRY_MS;
+            }
+        }
+        return;
+    }
+    if (!pc_ws_poll(s_ws, pc_net_ws_message, NULL)) {
+        printf("[Net] lost the town server\n");
+        if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+            pc_net_drop_conn("host gone");
+        } else {
+            int had_guest = s_relay_peer;
+
+            pc_ws_close(s_ws);
+            s_ws = NULL;
+            s_relay_peer = 0;
+            s_relay_retry_at = SDL_GetTicks() + PC_NET_RELAY_RETRY_MS;
+            if (had_guest) {
+                mNtp_on_disconnect();
+            }
+        }
+        return;
+    }
+    pc_net_dispatch();
+}
+
 static void pc_net_receive(void) {
+    if (s_relay) {
+        pc_net_receive_relay();
+        return;
+    }
     while (s_conn != PC_SOCK_INVALID) {
         int n;
 
@@ -234,7 +351,7 @@ void pc_net_poll(void) {
         pc_net_accept();
     }
     pc_net_receive();
-    if (s_conn != PC_SOCK_INVALID) {
+    if (pc_net_link_up()) {
         mNtp_tick();
     }
     pc_net_flush();
@@ -266,12 +383,45 @@ static void pc_net_init_host(void) {
     printf("[Net] hosting on TCP port %d\n", g_pc_net_port);
 }
 
+/* Guest through the town server: connect, then download the town like a direct guest. */
+static void pc_net_init_join_relay(void) {
+    char err[160];
+    char msg[256];
+
+    if (!pc_net_relay_connect(err, sizeof(err))) {
+        snprintf(msg, sizeof(msg), "No se pudo unir a la partida en vivo: %s", err);
+        pc_net_fail(msg);
+    }
+    printf("[Net] joined the live town, downloading it...\n");
+}
+
+static void pc_net_wait_boot_save(void) {
+    uint32_t version = PC_NET_PROTOCOL_VERSION;
+    uint32_t start;
+
+    s_booting = 1;
+    pc_net_send(PC_NET_MSG_HELLO, &version, sizeof(version));
+    start = SDL_GetTicks();
+    while (s_boot_save == NULL) {
+        pc_net_receive();
+        pc_net_flush();
+        if (!pc_net_link_up()) {
+            pc_net_fail("El anfitrion cerro la conexion antes de mandar el pueblo.");
+        }
+        if (SDL_GetTicks() - start > PC_NET_BOOT_SAVE_TIMEOUT_MS) {
+            pc_net_fail("El anfitrion no mando el pueblo a tiempo.");
+        }
+        SDL_Delay(10);
+    }
+    s_booting = 0;
+    printf("[Net] town received (%u bytes)\n", s_boot_save_size);
+}
+
 static void pc_net_init_join(void) {
     struct addrinfo hints;
     struct addrinfo* res = NULL;
     struct sockaddr_in addr;
     uint32_t start = SDL_GetTicks();
-    uint32_t version = PC_NET_PROTOCOL_VERSION;
     char msg[256];
 
     memset(&hints, 0, sizeof(hints));
@@ -308,22 +458,6 @@ static void pc_net_init_join(void) {
     }
 
     printf("[Net] connected, downloading town...\n");
-    s_booting = 1;
-    pc_net_send(PC_NET_MSG_HELLO, &version, sizeof(version));
-    start = SDL_GetTicks();
-    while (s_boot_save == NULL) {
-        pc_net_receive();
-        pc_net_flush();
-        if (s_conn == PC_SOCK_INVALID) {
-            pc_net_fail("El anfitrion cerro la conexion antes de mandar el pueblo.");
-        }
-        if (SDL_GetTicks() - start > PC_NET_BOOT_SAVE_TIMEOUT_MS) {
-            pc_net_fail("El anfitrion no mando el pueblo a tiempo.");
-        }
-        SDL_Delay(10);
-    }
-    s_booting = 0;
-    printf("[Net] town received (%u bytes)\n", s_boot_save_size);
 }
 
 void pc_net_init(void) {
@@ -340,10 +474,20 @@ void pc_net_init(void) {
     }
 #endif
 
+    if (s_relay) {
+        if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+            pc_net_init_join_relay();
+            pc_net_wait_boot_save();
+        } else {
+            pc_net_receive_relay(); /* first connection attempt */
+        }
+        return;
+    }
     if (g_pc_net_mode == PC_NET_MODE_HOST) {
         pc_net_init_host();
     } else {
         pc_net_init_join();
+        pc_net_wait_boot_save();
     }
 }
 
@@ -355,6 +499,10 @@ void pc_net_shutdown(void) {
     }
     done = 1;
     pc_net_flush();
+    if (s_ws != NULL) {
+        pc_ws_close(s_ws);
+        s_ws = NULL;
+    }
     if (s_conn != PC_SOCK_INVALID) {
         pc_sock_close(s_conn);
         s_conn = PC_SOCK_INVALID;

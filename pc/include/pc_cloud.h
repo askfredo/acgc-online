@@ -70,6 +70,7 @@ typedef struct {
     int residents;
     int free_slots;
     int playing; /* someone is in it right now */
+    int players; /* how many are playing it live */
     int mine;    /* this player lives there */
     float x;     /* stable spot on the map, 0..1 */
     float y;

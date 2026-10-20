@@ -74,6 +74,11 @@ extern int g_pc_net_mode;
 extern char g_pc_net_addr[64];
 extern int g_pc_net_port;
 
+/* Play live through the town server instead of a direct connection (set before
+ * pc_net_init): mode is PC_NET_MODE_HOST or _JOIN, url the relay's address, and up to two
+ * "Name: value" headers (authorization, town lock). */
+void pc_net_use_relay(int mode, const char* url, const char* header1, const char* header2);
+
 /* Host: start listening. Guest: connect and download the town (blocks until done or fails). */
 void pc_net_init(void);
 void pc_net_shutdown(void);

@@ -12,6 +12,7 @@
 #include "pc_msg.h"
 #include "pc_station.h"
 #include "pc_worldmap.h"
+#include "pc_net.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -155,12 +156,13 @@ int pc_station_open(void) {
         pc_msg_sanitize(s_towns[i].name, name, sizeof(name));
         pc_msg_set_choice(CHOICE_TOWN(i), name);
         if (s_towns[i].host[0] != '\0' && strcmp(s_towns[i].host, me) != 0) {
-            /* Joining someone's live game through the server isn't there yet. */
+            /* They're playing there now: the train joins their game. */
             snprintf(line, sizeof(line),
-                     "Eek!<<PAUSE [08]>> Someone's already playing\n"
-                     "in %s right now.<<BTN>>\n"
-                     "<<MSGCLEAR>>Give them a little while\n"
-                     "and try again,<<PAUSE [06]>> eek eek!\n"
+                     "To %s,<<PAUSE [06]>> eek?<<PAUSE [08]>> Someone's\n"
+                     "playing there right now,<<PAUSE [06]>> so\n"
+                     "you'll play together!<<BTN>>\n"
+                     "<<MSGCLEAR>>I'll save your game before\n"
+                     "you board.<<PAUSE [08]>> Eek eek!\n"
                      "<<MSGEND>>",
                      name);
         } else {
@@ -225,6 +227,17 @@ void pc_station_invite(const char* town_name) {
     char err[160];
     char text[640];
 
+    if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+        /* A guest in someone else's game: the town is theirs to share. */
+        pc_msg_set(PC_STATION_INVITE_CODE_MSG,
+                   "Eek!<<PAUSE [08]>> You're playing in someone\n"
+                   "else's game right now.<<BTN>>\n"
+                   "<<MSGCLEAR>>Ask them for the ticket,<<PAUSE [06]>>\n"
+                   "eek eek!\n"
+                   "<<MSGEND>>");
+        return;
+    }
+
     if (!pc_cloud_go_online(town_name, code, sizeof(code), err, sizeof(err))) {
         printf("[Station] invite failed: %s\n", err);
         return; /* the "printer is jammed" line stays */
@@ -281,8 +294,7 @@ int pc_station_ticket(const char* code) {
 }
 
 void pc_station_board(int town_idx) {
-    if (town_idx >= 0 && town_idx < s_town_count &&
-        (s_towns[town_idx].host[0] == '\0' || strcmp(s_towns[town_idx].host, pc_cloud_get_user()) == 0)) {
+    if (town_idx >= 0 && town_idx < s_town_count) {
         snprintf(s_depart_town, sizeof(s_depart_town), "%s", s_towns[town_idx].id);
     }
 }

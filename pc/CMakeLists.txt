@@ -435,6 +435,11 @@ endif()
 
 target_link_libraries(ac_pc mbedtls mbedx509 mbedcrypto imgui)
 
+# Town server the game uses when online.ini doesn't name one (Porter's online travel).
+set(ACGC_DEFAULT_SERVER "https://acgc-online-production.up.railway.app" CACHE STRING
+    "Default town server for online play (empty: online play needs online.ini)")
+target_compile_definitions(ac_pc PRIVATE PC_CLOUD_DEFAULT_SERVER="${ACGC_DEFAULT_SERVER}")
+
 set_target_properties(ac_pc PROPERTIES
     OUTPUT_NAME "AnimalCrossing"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"

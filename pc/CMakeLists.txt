@@ -288,6 +288,7 @@ set(PC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_net.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_http.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_cloud.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_menu.cpp
 )
 
 # Rename game's main() to ac_entry() to avoid conflict with PC main() and game_main(GAME*)
@@ -376,6 +377,24 @@ FetchContent_Declare(mbedtls
 )
 FetchContent_MakeAvailable(mbedtls)
 
+# =============================================================================
+# Dear ImGui (start menu), core + SDL2/OpenGL3 backends as a static lib
+# =============================================================================
+FetchContent_Declare(imgui
+    URL https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0.tar.gz
+    URL_HASH SHA256=f7bf6bc76e5d79d40d751096663e6c5d18daf08129dd52e7f7b09e4251c8eeee
+)
+FetchContent_MakeAvailable(imgui)
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${SDL2_INCLUDE_DIRS})
+
 add_executable(ac_pc
     ${PC_SOURCES}
     ${GAME_C_SOURCES}
@@ -398,7 +417,7 @@ else()
     target_link_libraries(ac_pc OpenGL::GL dl pthread m)
 endif()
 
-target_link_libraries(ac_pc mbedtls mbedx509 mbedcrypto)
+target_link_libraries(ac_pc mbedtls mbedx509 mbedcrypto imgui)
 
 set_target_properties(ac_pc PROPERTIES
     OUTPUT_NAME "AnimalCrossing"

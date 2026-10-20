@@ -20,6 +20,34 @@ int pc_cloud_parse_arg(int argc, char** argv, int* i, int* run_command);
 /* Runs the command given on the command line; returns the process exit code. */
 int pc_cloud_run_command(void);
 
+/* --- for the start menu (blocking calls; err gets a readable message) --- */
+
+typedef struct {
+    char id[32];
+    char name[48];
+    char code[16];
+    int residents;
+    int free_slots;
+    int save_version;
+    char host[32]; /* resident playing it right now, "" if nobody */
+} PcCloudTown;
+
+#define PC_CLOUD_MAX_TOWNS 32
+
+/* Loads online.ini; returns 1 if there is a server and a session. */
+int pc_cloud_load_settings(void);
+const char* pc_cloud_get_server(void);
+const char* pc_cloud_get_user(void);
+void pc_cloud_set_server(const char* url);
+int pc_cloud_auth(const char* user, const char* pass, int create_account, char* err, int err_size);
+void pc_cloud_logout(void);
+/* Returns the number of towns, or -1 on error. */
+int pc_cloud_list_towns(PcCloudTown* out, int max, char* err, int err_size);
+int pc_cloud_create_town(const char* name, PcCloudTown* out, char* err, int err_size);
+int pc_cloud_join_town(const char* code, PcCloudTown* out, char* err, int err_size);
+/* Play this town from the cloud (pc_cloud_start does the rest). */
+void pc_cloud_select_town(const char* id);
+
 /* Playing a cloud town: lock + download (blocks; exits with a message on failure). */
 void pc_cloud_start(void);
 void pc_cloud_shutdown(void);

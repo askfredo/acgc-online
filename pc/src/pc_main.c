@@ -11,6 +11,7 @@
 #include "pc_disc.h"
 #include "pc_net.h"
 #include "pc_cloud.h"
+#include "pc_menu.h"
 
 /* prefer discrete GPU on laptops */
 #ifdef _WIN32
@@ -267,6 +268,7 @@ extern int boot_main(int argc, const char** argv);
 
 int main(int argc, char* argv[]) {
     int cloud_command = 0;
+    int show_menu = 1;
 
     for (int i = 1; i < argc; i++) {
         if (pc_cloud_parse_arg(argc, argv, &i, &cloud_command)) {
@@ -286,8 +288,11 @@ int main(int argc, char* argv[]) {
             printf("  --create-town NAME  Create a town (prints its id and invite code)\n");
             printf("  --join-town CODE    Become a resident of a town\n");
             printf("  --town ID           Play a town from the cloud\n");
+            printf("  --no-menu           Skip the start menu (play offline)\n");
             printf("  --help, -h          Show this help message\n");
             return 0;
+        } else if (strcmp(argv[i], "--no-menu") == 0) {
+            show_menu = 0;
         } else if (strcmp(argv[i], "--no-framelimit") == 0) {
             g_pc_no_framelimit = 1;
         } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
@@ -378,6 +383,15 @@ int main(int argc, char* argv[]) {
     pc_settings_load();
     pc_keybindings_load();
     pc_platform_init();
+
+    /* Start menu unless the command line already said what to play. */
+    if (show_menu && !g_pc_cloud_mode && g_pc_net_mode == PC_NET_MODE_OFF && !g_pc_model_viewer) {
+        if (pc_menu_run() == PC_MENU_QUIT) {
+            pc_platform_shutdown();
+            return 0;
+        }
+    }
+
     pc_disc_init();
     pc_assets_init();
     pc_cloud_start();

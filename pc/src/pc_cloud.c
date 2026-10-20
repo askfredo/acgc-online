@@ -151,6 +151,151 @@ static void pc_cloud_json_escape(const char* in, char* out, size_t out_size) {
     out[n] = '\0';
 }
 
+/* --- minimal JSON reading for town lists --- */
+
+static const char* pc_json_ws(const char* p) {
+    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') {
+        p++;
+    }
+    return p;
+}
+
+/* Skips one value; returns the position after it, or NULL if malformed. */
+static const char* pc_json_skip(const char* p) {
+    int depth = 0;
+
+    p = pc_json_ws(p);
+    do {
+        if (*p == '\0') {
+            return NULL;
+        }
+        if (*p == '"') {
+            for (p++; *p != '"'; p++) {
+                if (*p == '\0') {
+                    return NULL;
+                }
+                if (*p == '\\' && p[1] != '\0') {
+                    p++;
+                }
+            }
+            p++;
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+            p++;
+        } else if (*p == '}' || *p == ']') {
+            depth--;
+            p++;
+        } else if (depth == 0) {
+            while (*p != '\0' && *p != ',' && *p != '}' && *p != ']') {
+                p++; /* number, true, false, null */
+            }
+        } else {
+            p++;
+        }
+        if (depth > 0) {
+            p = pc_json_ws(p);
+        }
+    } while (depth > 0);
+    return p;
+}
+
+/* In the object starting at obj ('{'), returns the value of key, or NULL. */
+static const char* pc_json_get(const char* obj, const char* key) {
+    const char* p = pc_json_ws(obj);
+    size_t key_len = strlen(key);
+
+    if (*p != '{') {
+        return NULL;
+    }
+    p = pc_json_ws(p + 1);
+    while (*p == '"') {
+        const char* k = p + 1;
+        const char* end = strchr(k, '"');
+        int match;
+
+        if (end == NULL) {
+            return NULL;
+        }
+        match = (size_t)(end - k) == key_len && strncmp(k, key, key_len) == 0;
+        p = pc_json_ws(end + 1);
+        if (*p != ':') {
+            return NULL;
+        }
+        p = pc_json_ws(p + 1);
+        if (match) {
+            return p;
+        }
+        p = pc_json_skip(p);
+        if (p == NULL) {
+            return NULL;
+        }
+        p = pc_json_ws(p);
+        if (*p == ',') {
+            p = pc_json_ws(p + 1);
+        }
+    }
+    return NULL;
+}
+
+static void pc_json_get_str(const char* obj, const char* key, char* out, size_t out_size) {
+    const char* v = pc_json_get(obj, key);
+    size_t n = 0;
+
+    out[0] = '\0';
+    if (v == NULL || *v != '"') {
+        return;
+    }
+    for (v++; *v != '\0' && *v != '"' && n + 1 < out_size; v++) {
+        if (*v == '\\' && v[1] != '\0') {
+            v++;
+        }
+        out[n++] = *v;
+    }
+    out[n] = '\0';
+}
+
+static int pc_json_get_int(const char* obj, const char* key) {
+    const char* v = pc_json_get(obj, key);
+    return v != NULL ? atoi(v) : 0;
+}
+
+static int pc_json_array_len(const char* v) {
+    int n = 0;
+
+    v = v != NULL ? pc_json_ws(v) : NULL;
+    if (v == NULL || *v != '[') {
+        return 0;
+    }
+    v = pc_json_ws(v + 1);
+    while (*v != ']' && *v != '\0') {
+        v = pc_json_skip(v);
+        if (v == NULL) {
+            return n;
+        }
+        n++;
+        v = pc_json_ws(v);
+        if (*v == ',') {
+            v = pc_json_ws(v + 1);
+        }
+    }
+    return n;
+}
+
+static void pc_cloud_parse_town(const char* obj, PcCloudTown* t) {
+    const char* host = pc_json_get(obj, "host");
+
+    memset(t, 0, sizeof(*t));
+    pc_json_get_str(obj, "id", t->id, sizeof(t->id));
+    pc_json_get_str(obj, "name", t->name, sizeof(t->name));
+    pc_json_get_str(obj, "code", t->code, sizeof(t->code));
+    t->residents = pc_json_array_len(pc_json_get(obj, "members"));
+    t->free_slots = pc_json_get_int(obj, "free_slots");
+    t->save_version = pc_json_get_int(obj, "save_version");
+    if (host != NULL && *host == '{') {
+        pc_json_get_str(host, "host", t->host, sizeof(t->host));
+    }
+}
+
 /* --- requests --- */
 
 static int pc_cloud_call(const char* method, const char* path, const char* const* extra, const void* body,
@@ -236,27 +381,139 @@ int pc_cloud_parse_arg(int argc, char** argv, int* i, int* run_command) {
     return 1;
 }
 
-static int pc_cloud_auth_command(const char* path) {
-    PcHttpResponse resp;
-    char user[160];
-    char pass[160];
-    char body[400];
-    char err[160];
+/* --- account and towns (command line and start menu) --- */
 
-    pc_cloud_json_escape(s_arg1, user, sizeof(user));
-    pc_cloud_json_escape(s_arg2, pass, sizeof(pass));
-    snprintf(body, sizeof(body), "{\"username\":\"%s\",\"password\":\"%s\"}", user, pass);
+int pc_cloud_load_settings(void) {
+    pc_cloud_load_ini();
+    return s_server[0] != '\0' && s_token[0] != '\0';
+}
+
+const char* pc_cloud_get_server(void) {
+    return s_server;
+}
+
+const char* pc_cloud_get_user(void) {
+    return s_token[0] != '\0' ? s_user : "";
+}
+
+void pc_cloud_set_server(const char* url) {
+    size_t n;
+
+    while (*url == ' ') {
+        url++;
+    }
+    snprintf(s_server, sizeof(s_server), "%s", url);
+    n = strlen(s_server);
+    while (n > 0 && (s_server[n - 1] == '/' || s_server[n - 1] == ' ')) {
+        s_server[--n] = '\0';
+    }
+    /* A bare domain (what Railway shows) means HTTPS. */
+    if (n > 0 && strncmp(s_server, "http://", 7) != 0 && strncmp(s_server, "https://", 8) != 0) {
+        char tmp[sizeof(s_server)];
+        snprintf(tmp, sizeof(tmp), "https://%.240s", s_server);
+        snprintf(s_server, sizeof(s_server), "%s", tmp);
+    }
+    pc_cloud_save_ini();
+}
+
+int pc_cloud_auth(const char* user, const char* pass, int create_account, char* err, int err_size) {
+    PcHttpResponse resp;
+    char user_esc[160];
+    char pass_esc[260];
+    char body[480];
+
+    pc_cloud_json_escape(user, user_esc, sizeof(user_esc));
+    pc_cloud_json_escape(pass, pass_esc, sizeof(pass_esc));
+    snprintf(body, sizeof(body), "{\"username\":\"%s\",\"password\":\"%s\"}", user_esc, pass_esc);
     s_token[0] = '\0';
-    pc_cloud_call("POST", path, NULL, body, (uint32_t)strlen(body), &resp);
+    pc_cloud_call("POST", create_account ? "/api/v1/register" : "/api/v1/login", NULL, body,
+                  (uint32_t)strlen(body), &resp);
     if (resp.status != 200 && resp.status != 201) {
-        fprintf(stderr, "Error: %s\n", pc_cloud_error_text(&resp, err, sizeof(err)));
+        pc_cloud_error_text(&resp, err, err_size);
         pc_http_free(&resp);
-        return 1;
+        return 0;
     }
     pc_cloud_json_str((const char*)resp.body, "username", s_user, sizeof(s_user));
     pc_cloud_json_str((const char*)resp.body, "token", s_token, sizeof(s_token));
     pc_http_free(&resp);
     pc_cloud_save_ini();
+    return 1;
+}
+
+void pc_cloud_logout(void) {
+    s_token[0] = '\0';
+    pc_cloud_save_ini();
+}
+
+int pc_cloud_list_towns(PcCloudTown* out, int max, char* err, int err_size) {
+    PcHttpResponse resp;
+    const char* p;
+    int n = 0;
+
+    pc_cloud_call("GET", "/api/v1/towns", NULL, NULL, 0, &resp);
+    if (resp.status != 200) {
+        pc_cloud_error_text(&resp, err, err_size);
+        pc_http_free(&resp);
+        return -1;
+    }
+    p = pc_json_ws((const char*)resp.body);
+    if (*p == '[') {
+        p = pc_json_ws(p + 1);
+        while (*p == '{' && n < max) {
+            pc_cloud_parse_town(p, &out[n++]);
+            p = pc_json_skip(p);
+            if (p == NULL) {
+                break;
+            }
+            p = pc_json_ws(p);
+            if (*p == ',') {
+                p = pc_json_ws(p + 1);
+            }
+        }
+    }
+    pc_http_free(&resp);
+    return n;
+}
+
+static int pc_cloud_town_call(const char* path, const char* field, const char* value, int ok_status,
+                              PcCloudTown* out, char* err, int err_size) {
+    PcHttpResponse resp;
+    char esc[160];
+    char body[256];
+
+    pc_cloud_json_escape(value, esc, sizeof(esc));
+    snprintf(body, sizeof(body), "{\"%s\":\"%s\"}", field, esc);
+    pc_cloud_call("POST", path, NULL, body, (uint32_t)strlen(body), &resp);
+    if (resp.status != ok_status) {
+        pc_cloud_error_text(&resp, err, err_size);
+        pc_http_free(&resp);
+        return 0;
+    }
+    pc_cloud_parse_town((const char*)resp.body, out);
+    pc_http_free(&resp);
+    return 1;
+}
+
+int pc_cloud_create_town(const char* name, PcCloudTown* out, char* err, int err_size) {
+    return pc_cloud_town_call("/api/v1/towns", "name", name, 201, out, err, err_size);
+}
+
+int pc_cloud_join_town(const char* code, PcCloudTown* out, char* err, int err_size) {
+    return pc_cloud_town_call("/api/v1/towns/join", "code", code, 200, out, err, err_size);
+}
+
+void pc_cloud_select_town(const char* id) {
+    snprintf(g_pc_cloud_town, sizeof(g_pc_cloud_town), "%s", id);
+    g_pc_cloud_mode = 1;
+}
+
+static int pc_cloud_auth_command(int create_account) {
+    char err[160];
+
+    if (!pc_cloud_auth(s_arg1, s_arg2, create_account, err, sizeof(err))) {
+        fprintf(stderr, "Error: %s\n", err);
+        return 1;
+    }
     printf("Logged in as %s (saved in %s)\n", s_user, PC_CLOUD_INI);
     return 0;
 }
@@ -282,14 +539,7 @@ int pc_cloud_run_command(void) {
 
     pc_cloud_load_ini();
     if (s_cmd == PC_CLOUD_CMD_SET_SERVER) {
-        size_t n;
-
-        snprintf(s_server, sizeof(s_server), "%s", s_arg1);
-        n = strlen(s_server);
-        while (n > 0 && s_server[n - 1] == '/') {
-            s_server[--n] = '\0';
-        }
-        pc_cloud_save_ini();
+        pc_cloud_set_server(s_arg1);
         printf("Server set to %s\n", s_server);
         return 0;
     }
@@ -299,9 +549,9 @@ int pc_cloud_run_command(void) {
 
     switch (s_cmd) {
         case PC_CLOUD_CMD_REGISTER:
-            return pc_cloud_auth_command("/api/v1/register");
+            return pc_cloud_auth_command(1);
         case PC_CLOUD_CMD_LOGIN:
-            return pc_cloud_auth_command("/api/v1/login");
+            return pc_cloud_auth_command(0);
         case PC_CLOUD_CMD_TOWNS:
             return pc_cloud_simple_command("GET", "/api/v1/towns", NULL, 200);
         case PC_CLOUD_CMD_CREATE:

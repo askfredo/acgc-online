@@ -227,6 +227,50 @@ static void Player_actor_emote_update(ACTOR* actorx, GAME* game) {
     }
 }
 
+/* Keep the two residents from walking through each other, the way villagers block the
+ * player: each side only pushes its own player out of the other's collision pipe. */
+#define Player_GHOST_COLLISION_DIST (2.0f * 20.0f) /* two player pipes (Player_actor_OcInfoData_forStand) */
+
+static void Player_actor_ghost_collide(ACTOR* actorx, GAME* game) {
+    PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
+    int main_index = player->now_main_index;
+    PcNetPlayerState remote;
+    f32 dx;
+    f32 dz;
+    f32 dist;
+
+    if (g_pc_net_mode == PC_NET_MODE_OFF || mEv_IsTitleDemo() || !mNtp_get_remote(&remote)) {
+        return;
+    }
+    if (remote.scene_no != Save_Get(scene_no) || remote.field_id != mFI_GetFieldId()) {
+        return;
+    }
+    /* Only free movement: demos (doors, train, events) place the player themselves. */
+    if (main_index != mPlayer_INDEX_WAIT && main_index != mPlayer_INDEX_WALK && main_index != mPlayer_INDEX_RUN &&
+        main_index != mPlayer_INDEX_DASH) {
+        return;
+    }
+    if (ABS(actorx->world.position.y - remote.pos[1]) > 60.0f) {
+        return; /* different heights (cliffs) */
+    }
+
+    dx = actorx->world.position.x - remote.pos[0];
+    dz = actorx->world.position.z - remote.pos[2];
+    dist = sqrtf(dx * dx + dz * dz);
+    if (dist >= Player_GHOST_COLLISION_DIST) {
+        return;
+    }
+
+    if (dist < 0.01f) {
+        /* Exactly on top of each other: step back from where we face. */
+        dx = -sin_s(actorx->shape_info.rotation.y);
+        dz = -cos_s(actorx->shape_info.rotation.y);
+        dist = 1.0f;
+    }
+    actorx->world.position.x = remote.pos[0] + dx * (Player_GHOST_COLLISION_DIST / dist);
+    actorx->world.position.z = remote.pos[2] + dz * (Player_GHOST_COLLISION_DIST / dist);
+}
+
 static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
     PcNetPlayerState state;

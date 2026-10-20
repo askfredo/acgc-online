@@ -1665,6 +1665,10 @@ extern void Player_actor_move(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
     int idx;
 
+#ifdef TARGET_PC
+    /* Before the main proc, so its BG check keeps the push out of walls and water. */
+    Player_actor_ghost_collide(actorx, game);
+#endif
     Player_actor_move_other_func1(actorx, game); //
     idx = player->now_main_index;
     if (mPlayer_MAIN_INDEX_VALID(idx) == FALSE || proc[idx] == NULL) {

@@ -1279,6 +1279,22 @@ extern void mPlib_change_player_face_pallet(GAME* game) {
     }
 }
 
+#ifdef TARGET_PC
+/* Netplay ghost: load another resident's face (eyes+mouth texture and palette). */
+extern void mPlib_PC_Load_FaceTexAndPallet(u8* tex_p, u16* pal_p, int sex, int face) {
+    u32 face_rom_p = mPlib_Get_UseFaceTexRom_p_common(sex, face, FALSE, FALSE);
+
+    if (tex_p == NULL || pal_p == NULL || face_rom_p == 0) {
+        return;
+    }
+    _JW_GetResourceAram(face_rom_p, tex_p, 0xE00);
+    _JW_GetResourceAram(face_rom_p + 0xE00, (u8*)pal_p, mNW_PALETTE_SIZE);
+    mPlib_ByteSwapPlayerPalette(pal_p);
+    DCStoreRangeNoSync(tex_p, 0xE00);
+    DCStoreRangeNoSync(pal_p, mNW_PALETTE_SIZE);
+}
+#endif
+
 extern void mPlib_change_player_face(GAME* game) {
     u8* player_face_p = mPlib_get_player_face_p(game);
     u32 player_face_rom_p = mPlib_Get_UseFaceTexRom_p();

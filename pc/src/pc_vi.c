@@ -1,5 +1,6 @@
 /* pc_vi.c - video interface → SDL window swap + frame pacing */
 #include "pc_platform.h"
+#include "pc_net.h"
 
 #define VI_TVMODE_NTSC_INT    0
 #define VI_TVMODE_NTSC_DS     1
@@ -36,6 +37,8 @@ void VIWaitForRetrace(void) {
         g_pc_running = 0;
         return;
     }
+
+    pc_net_poll();
 
     Uint64 t_before_swap = SDL_GetPerformanceCounter();
     pc_platform_swap_buffers();

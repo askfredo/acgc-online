@@ -389,7 +389,7 @@ static void Player_actor_draw_Normal(ACTOR* actorx, GAME* game) {
     }
 
 #ifdef TARGET_PC
-    Player_actor_ghost_draw(actorx, game, eye_tex_p, mouth_tex_p);
+    Player_actor_ghost_draw(actorx, game);
 #endif
 
 #if VERSION >= VER_GAFU01_00

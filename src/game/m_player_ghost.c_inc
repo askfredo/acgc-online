@@ -1,21 +1,32 @@
-/* m_player_ghost.c_inc - PC netplay: draw the remote player as a "ghost".
+/* m_player_ghost.c_inc - PC netplay: draw the other resident as a "ghost".
  *
  * The ghost is not an actor. The local player sends its state over the network
- * (pc_net) every frame, and the local player's draw also renders the remote
- * player's skeleton at the received position with the received animation.
- * The ghost reuses the textures the local player just bound (eyes, mouth,
- * clothing), so for now it looks like the local player in the other body type. */
+ * every frame (m_netplay.c), and the local player's draw also renders the remote
+ * player's skeleton at the received position, with the received animation and
+ * with the remote resident's own face and clothes loaded into private buffers. */
 
 #ifdef TARGET_PC
 #include "pc_net.h"
+
+extern void mNtp_player_update(const PcNetPlayerState* local);
+extern int mNtp_get_remote(PcNetPlayerState* out);
+extern void mPlib_PC_Load_FaceTexAndPallet(u8* tex_p, u16* pal_p, int sex, int face);
+
+#define Player_GHOST_FACE_TEX_SIZE 0xE00
 
 typedef struct {
     cKF_SkeletonInfo_R_c keyframe;
     s_xyz joint_data[mPlayer_JOINT_NUM + 1];
     s_xyz morph_data[mPlayer_JOINT_NUM + 1];
     Mtx work_mtx[2][13];
+    u8 face_tex[Player_GHOST_FACE_TEX_SIZE] ATTRIBUTE_ALIGN(32);
+    u16 face_pal[16] ATTRIBUTE_ALIGN(32);
+    u8 cloth_tex[mNW_DESIGN_TEX_SIZE] ATTRIBUTE_ALIGN(32);
+    u16 cloth_pal[16] ATTRIBUTE_ALIGN(32);
     int anim_idx;
     int gender;
+    int face;
+    int cloth_idx;
     int ready;
 } Player_ghost_c;
 
@@ -31,6 +42,7 @@ static void Player_actor_ghost_send_state(ACTOR* actorx) {
 
     memset(&state, 0, sizeof(state));
     state.scene_no = Save_Get(scene_no);
+    state.field_id = mFI_GetFieldId();
     state.pos[0] = actorx->world.position.x;
     state.pos[1] = actorx->world.position.y;
     state.pos[2] = actorx->world.position.z;
@@ -38,44 +50,59 @@ static void Player_actor_ghost_send_state(ACTOR* actorx) {
     state.anim_idx = (s16)player->animation0_idx;
     state.anim_frame = player->keyframe0.frame_control.current_frame;
     state.gender = Now_Private->gender;
-    pc_net_update(&state);
+    state.face = Now_Private->face;
+    state.eye_tex_idx = player->eye_tex_idx;
+    state.mouth_tex_idx = player->mouth_tex_idx;
+    state.cloth_idx = Now_Private->cloth.idx;
+    state.player_no = Common_Get(player_no);
+    mNtp_player_update(&state);
+}
+
+static void Player_actor_ghost_update_look(Player_ghost_c* ghost, const PcNetPlayerState* remote) {
+    if (!ghost->ready || ghost->gender != remote->gender) {
+        cKF_Skeleton_R_c* skeleton = remote->gender == mPr_SEX_MALE ? &cKF_bs_r_boy_1 : &cKF_bs_r_grl_1;
+
+        cKF_SkeletonInfo_R_ct(&ghost->keyframe, skeleton, NULL, ghost->joint_data, ghost->morph_data);
+        ghost->anim_idx = -1;
+        ghost->face = -1;
+    }
+
+    if (!ghost->ready || ghost->gender != remote->gender || ghost->face != remote->face) {
+        mPlib_PC_Load_FaceTexAndPallet(ghost->face_tex, ghost->face_pal, remote->gender, remote->face);
+        ghost->face = remote->face;
+    }
+
+    if (!ghost->ready || ghost->cloth_idx != remote->cloth_idx) {
+        mPlib_Load_PlayerTexAndPallet(ghost->cloth_tex, ghost->cloth_pal, remote->cloth_idx);
+        ghost->cloth_idx = remote->cloth_idx;
+    }
+
+    ghost->gender = remote->gender;
+    ghost->ready = TRUE;
 }
 
 /* Called at the end of the local player's normal draw, so the scene's lights are set up. */
-static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game, u8* eye_tex_p, u8* mouth_tex_p) {
+static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     Player_ghost_c* ghost = &l_player_ghost;
     PcNetPlayerState remote;
     cKF_Animation_R_c* anim;
     s_xyz rot;
-    u8* tex_p;
-    u16* pallet_p;
-    u16* face_pallet_p;
+    u8* eye_tex_p;
+    u8* mouth_tex_p;
     GRAPH* graph = game->graph;
 
-    if (g_pc_net_mode == PC_NET_MODE_OFF || !pc_net_get_remote(&remote)) {
+    if (g_pc_net_mode == PC_NET_MODE_OFF || !mNtp_get_remote(&remote)) {
+        return;
+    }
+    if (remote.scene_no != Save_Get(scene_no) || remote.field_id != mFI_GetFieldId()) {
+        return;
+    }
+    if (remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM || remote.eye_tex_idx >= mPlayer_EYE_TEX_NUM ||
+        remote.mouth_tex_idx >= mPlayer_MOUTH_TEX_NUM) {
         return;
     }
 
-    /* Item drawing may have rebound segments since the player's skeleton was drawn,
-     * and the texture banks are not loaded on every frame (e.g. while a scene loads). */
-    tex_p = mPlib_get_player_tex_p(game);
-    pallet_p = mPlib_get_player_pallet_p(game);
-    face_pallet_p = mPlib_get_player_face_pallet_p(game);
-    if (eye_tex_p == NULL || mouth_tex_p == NULL || tex_p == NULL || pallet_p == NULL || face_pallet_p == NULL) {
-        return;
-    }
-    if (remote.scene_no != Save_Get(scene_no) || remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM) {
-        return;
-    }
-
-    if (!ghost->ready || ghost->gender != remote.gender) {
-        cKF_Skeleton_R_c* skeleton = remote.gender == mPr_SEX_MALE ? &cKF_bs_r_boy_1 : &cKF_bs_r_grl_1;
-
-        cKF_SkeletonInfo_R_ct(&ghost->keyframe, skeleton, NULL, ghost->joint_data, ghost->morph_data);
-        ghost->gender = remote.gender;
-        ghost->anim_idx = -1;
-        ghost->ready = TRUE;
-    }
+    Player_actor_ghost_update_look(ghost, &remote);
 
     anim = mPlib_Get_Pointer_Animation(remote.anim_idx);
     if (anim == NULL) {
@@ -91,17 +118,20 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game, u8* eye_tex_p, u8
     ghost->keyframe.frame_control.current_frame = remote.anim_frame;
     cKF_SkeletonInfo_R_play(&ghost->keyframe);
 
-    rot.x = 0;
-    rot.y = remote.angle_y;
-    rot.z = 0;
+    eye_tex_p = ghost->face_tex + remote.eye_tex_idx * 0x100;
+    mouth_tex_p = ghost->face_tex + (mPlayer_EYE_TEX_NUM + remote.mouth_tex_idx) * 0x100;
 
     OPEN_POLY_OPA_DISP(graph);
     gSPSegment(POLY_OPA_DISP++, ANIME_1_TXT_SEG, eye_tex_p);
     gSPSegment(POLY_OPA_DISP++, ANIME_2_TXT_SEG, mouth_tex_p);
-    gSPSegment(POLY_OPA_DISP++, ANIME_3_TXT_SEG, tex_p);
-    gSPSegment(POLY_OPA_DISP++, ANIME_4_TXT_SEG, pallet_p);
-    gSPSegment(POLY_OPA_DISP++, ANIME_5_TXT_SEG, face_pallet_p);
+    gSPSegment(POLY_OPA_DISP++, ANIME_3_TXT_SEG, ghost->cloth_tex);
+    gSPSegment(POLY_OPA_DISP++, ANIME_4_TXT_SEG, ghost->cloth_pal);
+    gSPSegment(POLY_OPA_DISP++, ANIME_5_TXT_SEG, ghost->face_pal);
     CLOSE_POLY_OPA_DISP(graph);
+
+    rot.x = 0;
+    rot.y = remote.angle_y;
+    rot.z = 0;
 
     Matrix_push();
     Matrix_softcv3_load(&rot, remote.pos[0], remote.pos[1] + actorx->shape_info.ofs_y * actorx->scale.y,

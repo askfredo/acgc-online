@@ -12,6 +12,7 @@
 #include "m_vibctl.h"
 #include "m_bg_item.h"
 #include "pc_save_bswap.h"
+#include "pc_net.h"
 #include "game.h"
 
 #include <stdio.h>
@@ -147,28 +148,17 @@ static void pc_save_rotate_backups(const char* base_path) {
     }
 }
 
-static int pc_save_write_gci(void) {
-    FILE* fp;
+/* Serialize the in-memory save into GCI file data (GCI_FILE_DATA_SIZE bytes, caller frees)
+ * and fill in the matching CARDDir header. */
+static u8* pc_save_build_gci(CARDDir* dir_hdr_out) {
     u8* file_data;
     CARDDir dir_hdr;
     Save_t* save_copy;
     u16 checksum;
     u8* others_ptr;
 
-    if (!pc_save_ready) return TRUE;
-
-#ifdef _WIN32
-    _mkdir(PC_SAVE_DIR);
-#else
-    mkdir(PC_SAVE_DIR, 0755);
-#endif
-
-    Save_Get(save_exist) = TRUE;
-    Save_Get(save_check).version = mFRm_VERSION;
-    mFRm_SetSaveCheckData(Save_GetPointer(save_check));
-
     file_data = (u8*)calloc(1, GCI_FILE_DATA_SIZE);
-    if (!file_data) return FALSE;
+    if (!file_data) return NULL;
 
     /* Others block (offset 0) — comment, banner, ARAM blocks */
     others_ptr = file_data + GCI_OTHERS_OFFSET;
@@ -243,6 +233,32 @@ static int pc_save_write_gci(void) {
     put_be16((u8*)&dir_hdr.length, (u16)(GCI_FILE_DATA_SIZE / GCI_SECTOR_SIZE));
     put_be32((u8*)&dir_hdr.commentAddr, 0);
 
+    *dir_hdr_out = dir_hdr;
+    return file_data;
+}
+
+static int pc_save_write_gci(void) {
+    FILE* fp;
+    u8* file_data;
+    CARDDir dir_hdr;
+
+    if (!pc_save_ready) return TRUE;
+    /* Netplay guest never touches the save on disk (the host's copy is authoritative). */
+    if (g_pc_net_mode == PC_NET_MODE_JOIN) return TRUE;
+
+#ifdef _WIN32
+    _mkdir(PC_SAVE_DIR);
+#else
+    mkdir(PC_SAVE_DIR, 0755);
+#endif
+
+    Save_Get(save_exist) = TRUE;
+    Save_Get(save_check).version = mFRm_VERSION;
+    mFRm_SetSaveCheckData(Save_GetPointer(save_check));
+
+    file_data = pc_save_build_gci(&dir_hdr);
+    if (!file_data) return FALSE;
+
     /* write temp file → rotate backups → rename */
     fp = fopen(PC_GCI_TMP_PATH, "wb");
     if (!fp) {
@@ -282,13 +298,14 @@ static int pc_save_write_gci(void) {
     return TRUE;
 }
 
+static int pc_save_load_gci_data(const u8* file_data);
+
 static int pc_save_read_gci(const char* path) {
     FILE* fp;
     CARDDir dir_hdr;
     u8* file_data;
-    Save_t* save_src;
-    u32 offset;
     long file_size;
+    int result;
 
     fp = fopen(path, "rb");
     if (!fp) {
@@ -338,7 +355,17 @@ static int pc_save_read_gci(const char* path) {
     }
     fclose(fp);
 
-    save_src = (Save_t*)(file_data + GCI_SAVE_MAIN_OFFSET);
+    result = pc_save_load_gci_data(file_data);
+    free(file_data);
+    return result;
+}
+
+/* Load GCI file data (without the CARDDir header) into the live save and ARAM blocks. */
+static int pc_save_load_gci_data(const u8* file_data) {
+    const Save_t* save_src;
+    u32 offset;
+
+    save_src = (const Save_t*)(file_data + GCI_SAVE_MAIN_OFFSET);
     pc_save_bswap_verify_roundtrip((const u8*)save_src, sizeof(Save_t));
 
     memcpy(&common_data.save.save, save_src, sizeof(Save_t));
@@ -346,7 +373,7 @@ static int pc_save_read_gci(const char* path) {
 
     /* --- Load ARAM blocks from Others section --- */
     {
-        u8* others_ptr = file_data + GCI_OTHERS_OFFSET;
+        const u8* others_ptr = file_data + GCI_OTHERS_OFFSET;
         offset = sizeof(MemcardHeader_c) + 32; /* skip header + pad */
 
         offset = ALIGN_NEXT(offset, 32);
@@ -382,8 +409,40 @@ static int pc_save_read_gci(const char* path) {
         }
     }
 
-    free(file_data);
     return TRUE;
+}
+
+/* --- Netplay: the host's live save is sent to the guest as a whole GCI --- */
+
+int pc_save_serialize(u8** out, u32* out_size) {
+    CARDDir dir_hdr;
+    u8* file_data = pc_save_build_gci(&dir_hdr);
+    u8* buf;
+
+    if (!file_data) return FALSE;
+    buf = (u8*)malloc(GCI_HEADER_SIZE + GCI_FILE_DATA_SIZE);
+    if (!buf) {
+        free(file_data);
+        return FALSE;
+    }
+    memcpy(buf, &dir_hdr, GCI_HEADER_SIZE);
+    memcpy(buf + GCI_HEADER_SIZE, file_data, GCI_FILE_DATA_SIZE);
+    free(file_data);
+    *out = buf;
+    *out_size = GCI_HEADER_SIZE + GCI_FILE_DATA_SIZE;
+    return TRUE;
+}
+
+int pc_save_load_buffer(const u8* buf, u32 size) {
+    if (size != GCI_HEADER_SIZE + GCI_FILE_DATA_SIZE || memcmp(((const CARDDir*)buf)->gameName, "GAF", 3) != 0) {
+        OSReport("[PC] netplay save: bad size %u or header\n", (unsigned)size);
+        return FALSE;
+    }
+    return pc_save_load_gci_data(buf + GCI_HEADER_SIZE);
+}
+
+void* pc_save_get_aram_block(int idx) {
+    return (idx >= 0 && idx < mCD_ARAM_DATA_NUM) ? l_aram_block_p_table[idx] : NULL;
 }
 
 static int pc_save_scan_gci_dir(void) {
@@ -409,6 +468,20 @@ static int pc_save_scan_gci_dir(void) {
 
 int pc_save_check_and_load(void) {
     struct stat st;
+
+    /* Netplay guest: the town comes from the host, never from local disk. */
+    if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+        uint32_t size;
+        const u8* buf = pc_net_get_boot_save(&size);
+
+        if (buf != NULL && pc_save_load_buffer(buf, size)) {
+            OSReport("[PC] Loaded host's town over netplay\n");
+            pc_net_free_boot_save();
+            return TRUE;
+        }
+        OSReport("[PC] Netplay: no save received from host\n");
+        return FALSE;
+    }
     {
         char cwd[512];
         if (getcwd(cwd, sizeof(cwd))) {
@@ -500,7 +573,17 @@ void mCD_LoadLand(void) {
 }
 
 int mCD_SaveHome_bg(int param_1, int* chan) {
-    int result = pc_save_write_gci();
+    int result;
+
+    /* Netplay guest: the host owns the save file; send this player's data to it instead. */
+    if (g_pc_net_mode == PC_NET_MODE_JOIN) {
+        extern int mNtp_guest_send_player(void);
+
+        if (chan) *chan = mCD_SLOT_A;
+        return mNtp_guest_send_player() ? mCD_TRANS_ERR_NONE : mCD_TRANS_ERR_IOERROR;
+    }
+
+    result = pc_save_write_gci();
     if (chan) *chan = mCD_SLOT_A;
     if (!result) {
         OSReport("[PC] mCD_SaveHome_bg: save failed!\n");

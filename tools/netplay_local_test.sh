@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run two game instances on this machine connected by netplay (host + join).
-# Both start from the same town save so positions line up.
-#   tools/netplay_local_test.sh            # uses save from pc/build32/bin/save
+# The host plays a copy of the town in pc/build32/netplay/host (made from
+# pc/build32/bin/save the first time, or again with --reset); the guest gets the
+# town from the host over the network and never writes a save of its own.
+#   tools/netplay_local_test.sh [--reset]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,18 +12,20 @@ RUN="$ROOT/pc/build32/netplay"
 
 for side in host join; do
     dir="$RUN/$side"
-    mkdir -p "$dir/save"
+    mkdir -p "$dir"
     ln -sfn "$BIN/AnimalCrossing" "$dir/AnimalCrossing"
     ln -sfn "$BIN/shaders" "$dir/shaders"
     [ -d "$BIN/rom" ] && ln -sfn "$BIN/rom" "$dir/rom"
-    [ -d "$ROOT/rom" ] && [ ! -e "$dir/rom" ] && ln -sfn "$ROOT/rom" "$dir/rom"
-    # Fresh copy of the shared town each run.
-    if [ -d "$BIN/save" ]; then
-        cp -f "$BIN"/save/*.gci "$dir/save/" 2>/dev/null || true
-    fi
     [ -f "$BIN/settings.ini" ] && cp -f "$BIN/settings.ini" "$dir/"
     [ -f "$BIN/keybindings.ini" ] && cp -f "$BIN/keybindings.ini" "$dir/"
 done
+
+if [ "${1:-}" = "--reset" ] || [ ! -d "$RUN/host/save" ]; then
+    rm -rf "$RUN/host/save"
+    mkdir -p "$RUN/host/save"
+    cp -f "$BIN"/save/*.gci "$RUN/host/save/"
+fi
+rm -rf "$RUN/join/save"
 
 (cd "$RUN/host" && ./AnimalCrossing --verbose --host > host.log 2>&1) &
 sleep 1

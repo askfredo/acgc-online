@@ -1522,6 +1522,12 @@ static void Player_actor_check_remove_design(void);
 static void Player_actor_check_fold_paper_airplane(void);
 #endif
 
+#ifdef TARGET_PC
+extern cKF_Skeleton_R_c cKF_bs_r_boy_1;
+extern cKF_Skeleton_R_c cKF_bs_r_grl_1;
+#include "../src/game/m_player_ghost.c_inc"
+#endif
+
 extern void Player_actor_move(ACTOR* actorx, GAME* game) {
     static const mPlayer_MAIN_PROC proc[] = {
         &Player_actor_main_Dma,
@@ -1672,6 +1678,9 @@ extern void Player_actor_move(ACTOR* actorx, GAME* game) {
     Player_actor_check_remove_design();
     Player_actor_check_fold_paper_airplane();
 #endif
+#ifdef TARGET_PC
+    Player_actor_ghost_send_state(actorx);
+#endif
 }
 
 typedef void (*mPlayer_DRAW_PROC)(ACTOR*, GAME*);
@@ -1730,6 +1739,10 @@ extern void Player_actor_draw(ACTOR* actorx, GAME* game) {
 
         if (draw_idx >= 0 && draw_idx < mPlayer_DRAW_TYPE_NUM && proc[draw_idx] != NULL) {
             (*proc[draw_idx])(actorx, game);
+#ifdef TARGET_PC
+            /* Same display list state as the local player: textures and lights are still bound. */
+            Player_actor_ghost_draw(actorx, game);
+#endif
             Player_actor_draw_other_func2(actorx, game); //
         }
     }

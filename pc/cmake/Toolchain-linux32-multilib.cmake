@@ -1,0 +1,7 @@
+# CMake toolchain file for Linux i686 using the host gcc with -m32 (Arch multilib)
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR i686)
+set(CMAKE_C_COMPILER gcc)
+set(CMAKE_CXX_COMPILER g++)
+set(CMAKE_C_FLAGS "-m32" CACHE STRING "")
+set(CMAKE_CXX_FLAGS "-m32" CACHE STRING "")

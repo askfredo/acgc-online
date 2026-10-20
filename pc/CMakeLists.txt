@@ -285,6 +285,7 @@ set(PC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_deluxe_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_assets.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_disc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_net.c
 )
 
 # Rename game's main() to ac_entry() to avoid conflict with PC main() and game_main(GAME*)
@@ -374,7 +375,7 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(ac_pc opengl32 winmm imm32 version setupapi)
+    target_link_libraries(ac_pc opengl32 winmm imm32 version setupapi ws2_32)
 else()
     find_package(OpenGL REQUIRED)
     target_link_libraries(ac_pc OpenGL::GL dl pthread m)

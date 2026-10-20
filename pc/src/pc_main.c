@@ -9,6 +9,7 @@
 #include "pc_keybindings.h"
 #include "pc_assets.h"
 #include "pc_disc.h"
+#include "pc_net.h"
 
 /* prefer discrete GPU on laptops */
 #ifdef _WIN32
@@ -271,6 +272,8 @@ int main(int argc, char* argv[]) {
             printf("  --no-framelimit     Disable frame limiter\n");
             printf("  --model-viewer [N]  Launch model viewer (optional start index)\n");
             printf("  --time HOUR         Override in-game hour (0-23)\n");
+            printf("  --host [PORT]       Host a netplay session (default port %d)\n", PC_NET_DEFAULT_PORT);
+            printf("  --join IP[:PORT]    Join a netplay session\n");
             printf("  --help, -h          Show this help message\n");
             return 0;
         } else if (strcmp(argv[i], "--no-framelimit") == 0) {
@@ -283,6 +286,23 @@ int main(int argc, char* argv[]) {
                 g_pc_model_viewer_start = atoi(argv[i + 1]);
                 i++;
             }
+        } else if (strcmp(argv[i], "--host") == 0) {
+            g_pc_net_mode = PC_NET_MODE_HOST;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                g_pc_net_port = atoi(argv[i + 1]);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--join") == 0 && i + 1 < argc) {
+            char* colon;
+
+            g_pc_net_mode = PC_NET_MODE_JOIN;
+            snprintf(g_pc_net_addr, sizeof(g_pc_net_addr), "%s", argv[i + 1]);
+            colon = strchr(g_pc_net_addr, ':');
+            if (colon != NULL) {
+                *colon = '\0';
+                g_pc_net_port = atoi(colon + 1);
+            }
+            i++;
         } else if (strcmp(argv[i], "--time") == 0 && i + 1 < argc) {
             g_pc_time_override = atoi(argv[i + 1]);
             if (g_pc_time_override < 0 || g_pc_time_override > 23) g_pc_time_override = -1;
@@ -344,10 +364,12 @@ int main(int argc, char* argv[]) {
     pc_platform_init();
     pc_disc_init();
     pc_assets_init();
+    pc_net_init();
 
     ac_entry();                         /* sets HotStartEntry = &entry */
     boot_main(argc, (const char**)argv); /* full init → HotStartEntry → game loop */
 
+    pc_net_shutdown();
     pc_disc_shutdown();
     pc_platform_shutdown();
     return 0;

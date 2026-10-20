@@ -1,0 +1,91 @@
+/* m_player_ghost.c_inc - PC netplay: draw the remote player as a "ghost".
+ *
+ * The ghost is not an actor. The local player sends its state over the network
+ * (pc_net) every frame, and the local player's draw also renders the remote
+ * player's skeleton at the received position with the received animation.
+ * The ghost reuses the textures the local player just bound (eyes, mouth,
+ * clothing), so for now it looks like the local player in the other body type. */
+
+#ifdef TARGET_PC
+#include "pc_net.h"
+
+typedef struct {
+    cKF_SkeletonInfo_R_c keyframe;
+    s_xyz joint_data[mPlayer_JOINT_NUM + 1];
+    s_xyz morph_data[mPlayer_JOINT_NUM + 1];
+    Mtx work_mtx[2][13];
+    int anim_idx;
+    int gender;
+    int ready;
+} Player_ghost_c;
+
+static Player_ghost_c l_player_ghost;
+
+static void Player_actor_ghost_send_state(ACTOR* actorx) {
+    PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
+    PcNetPlayerState state;
+
+    if (g_pc_net_mode == PC_NET_MODE_OFF) {
+        return;
+    }
+
+    memset(&state, 0, sizeof(state));
+    state.scene_no = Save_Get(scene_no);
+    state.pos[0] = actorx->world.position.x;
+    state.pos[1] = actorx->world.position.y;
+    state.pos[2] = actorx->world.position.z;
+    state.angle_y = actorx->shape_info.rotation.y;
+    state.anim_idx = (s16)player->animation0_idx;
+    state.anim_frame = player->keyframe0.frame_control.current_frame;
+    state.gender = Now_Private->gender;
+    pc_net_update(&state);
+}
+
+static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
+    Player_ghost_c* ghost = &l_player_ghost;
+    PcNetPlayerState remote;
+    cKF_Animation_R_c* anim;
+    s_xyz rot;
+
+    if (g_pc_net_mode == PC_NET_MODE_OFF || !pc_net_get_remote(&remote)) {
+        return;
+    }
+    if (remote.scene_no != Save_Get(scene_no) || remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM) {
+        return;
+    }
+
+    if (!ghost->ready || ghost->gender != remote.gender) {
+        cKF_Skeleton_R_c* skeleton = remote.gender == mPr_SEX_MALE ? &cKF_bs_r_boy_1 : &cKF_bs_r_grl_1;
+
+        cKF_SkeletonInfo_R_ct(&ghost->keyframe, skeleton, NULL, ghost->joint_data, ghost->morph_data);
+        ghost->gender = remote.gender;
+        ghost->anim_idx = -1;
+        ghost->ready = TRUE;
+    }
+
+    anim = mPlib_Get_Pointer_Animation(remote.anim_idx);
+    if (anim == NULL) {
+        return;
+    }
+    if (ghost->anim_idx != remote.anim_idx) {
+        cKF_SkeletonInfo_R_init_standard_repeat(&ghost->keyframe, anim, NULL);
+        ghost->anim_idx = remote.anim_idx;
+    }
+
+    /* Pose the skeleton at exactly the remote frame. */
+    ghost->keyframe.frame_control.speed = 0.0f;
+    ghost->keyframe.frame_control.current_frame = remote.anim_frame;
+    cKF_SkeletonInfo_R_play(&ghost->keyframe);
+
+    rot.x = 0;
+    rot.y = remote.angle_y;
+    rot.z = 0;
+
+    Matrix_push();
+    Matrix_softcv3_load(&rot, remote.pos[0], remote.pos[1] + actorx->shape_info.ofs_y * actorx->scale.y,
+                        remote.pos[2]);
+    Matrix_scale(actorx->scale.x, actorx->scale.y, actorx->scale.z, MTX_MULT);
+    cKF_Si3_draw_R_SV(game, &ghost->keyframe, ghost->work_mtx[game->frame_counter % 2], NULL, NULL, NULL);
+    Matrix_pull();
+}
+#endif

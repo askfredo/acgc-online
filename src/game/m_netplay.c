@@ -20,6 +20,8 @@
 #include "m_event.h"
 #include "m_play.h"
 #include "m_actor.h"
+#include "m_player_lib.h"
+#include "ac_structure.h"
 #include "pc_net.h"
 
 #include <stdio.h>
@@ -29,8 +31,13 @@
 #define mNtp_FG_CELLS (FG_BLOCK_Z_NUM * FG_BLOCK_X_NUM * UT_Z_NUM * UT_X_NUM)
 #define mNtp_DEPOSIT_ROWS (FG_BLOCK_X_NUM * FG_BLOCK_Z_NUM * UT_Z_NUM)
 #define mNtp_REMOTE_TIMEOUT_FRAMES 120
+#define mNtp_TREE_QUEUE 8
+#define mNtp_DOOR_TIMEOUT_FRAMES 10
+#define mNtp_DOOR_EXIT_RADIUS 200.0f
 
 extern int pc_save_serialize(u8** out, u32* out_size);
+extern unsigned int pc_image_base;
+extern unsigned int pc_image_end;
 extern void* pc_save_get_aram_block(int idx);
 
 typedef struct {
@@ -65,6 +72,31 @@ typedef struct {
     mDi_entry_c diary[mCD_KEEP_DIARY_ENTRY_COUNT];
 } mNtp_player_c;
 
+typedef struct {
+    u16 item;
+    s16 ut_x;
+    s16 ut_z;
+    u8 little;
+    u8 pad;
+} mNtp_tree_shake_c;
+
+/* A structure's door animation, sent every frame while it plays. Structure animations
+ * are static data in the executable, so they are identified by their offset in it. */
+typedef struct {
+    u16 npc_id; /* structure item name */
+    u16 pad;
+    s32 scene_no;
+    s32 field_id;
+    f32 home_x;
+    f32 home_z;
+    u32 anim_ofs;
+    f32 start_frame;
+    f32 end_frame;
+    f32 current_frame;
+    f32 speed;
+    s32 mode;
+} mNtp_door_c;
+
 enum {
     mNtp_PLAYER_ACK_OK,
     mNtp_PLAYER_ACK_SAME_PLAYER,
@@ -87,6 +119,15 @@ static struct {
     u16 deposit_shadow[mNtp_DEPOSIT_ROWS];
     u16 fg_canon[mNtp_FG_CELLS]; /* town items as they would be saved (see mNtp_build_canon) */
     u32 canon_vi_frame;
+
+    mNtp_tree_shake_c tree_queue[mNtp_TREE_QUEUE];
+    int tree_count;
+
+    mNtp_door_c remote_door; /* latest door frame from the peer */
+    u32 remote_door_frame;
+    int have_remote_door;
+    STRUCTURE_ACTOR* door_actor; /* local structure currently driven by the peer */
+    cKF_SkeletonInfo_R_c door_saved_keyframe;
 } l_ntp;
 
 static u16* mNtp_fg_cells(void) {
@@ -183,6 +224,8 @@ void mNtp_on_connect(void) {
 }
 
 void mNtp_on_disconnect(void) {
+    l_ntp.tree_count = 0;
+    l_ntp.have_remote_door = FALSE; /* the door is released on the next frame's timeout check */
     l_ntp.synced = FALSE;
     l_ntp.sync_requested = FALSE;
     l_ntp.have_remote = FALSE;
@@ -423,12 +466,185 @@ void mNtp_on_message(int type, const void* data, uint32_t len) {
                 mNtp_host_recv_player((const mNtp_player_c*)data);
             }
             break;
+        case PC_NET_MSG_TREE_SHAKE:
+            if (len == sizeof(mNtp_tree_shake_c) && l_ntp.tree_count < mNtp_TREE_QUEUE) {
+                memcpy(&l_ntp.tree_queue[l_ntp.tree_count++], data, sizeof(mNtp_tree_shake_c));
+            }
+            break;
+        case PC_NET_MSG_DOOR:
+            if (len == sizeof(mNtp_door_c)) {
+                memcpy(&l_ntp.remote_door, data, sizeof(mNtp_door_c));
+                l_ntp.remote_door_frame = l_ntp.frame;
+                l_ntp.have_remote_door = TRUE;
+            }
+            break;
         case PC_NET_MSG_PLAYER_ACK:
             if (len == sizeof(int)) {
                 l_ntp.player_ack = *(const int*)data;
             }
             break;
     }
+}
+
+/* --- trees --- */
+
+void mNtp_send_tree_shake(u16 item, int ut_x, int ut_z, int little) {
+    mNtp_tree_shake_c m;
+
+    if (g_pc_net_mode == PC_NET_MODE_OFF || !l_ntp.synced) {
+        return;
+    }
+    m.item = item;
+    m.ut_x = ut_x;
+    m.ut_z = ut_z;
+    m.little = little != FALSE;
+    m.pad = 0;
+    pc_net_send(PC_NET_MSG_TREE_SHAKE, &m, sizeof(m));
+}
+
+int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little) {
+    mNtp_tree_shake_c* m;
+
+    if (l_ntp.tree_count <= 0) {
+        return FALSE;
+    }
+    m = &l_ntp.tree_queue[0];
+    *item = m->item;
+    *ut_x = m->ut_x;
+    *ut_z = m->ut_z;
+    *little = m->little;
+    l_ntp.tree_count--;
+    memmove(&l_ntp.tree_queue[0], &l_ntp.tree_queue[1], l_ntp.tree_count * sizeof(mNtp_tree_shake_c));
+    return TRUE;
+}
+
+/* --- doors --- */
+
+static int mNtp_is_structure(ACTOR* actor) {
+    return actor->part == ACTOR_PART_ITEM && ITEM_NAME_GET_TYPE(actor->npc_id) == NAME_TYPE_STRUCT;
+}
+
+static STRUCTURE_ACTOR* mNtp_find_structure(GAME_PLAY* play, u16 npc_id, f32 x, f32 z) {
+    ACTOR* actor;
+
+    for (actor = play->actor_info.list[ACTOR_PART_ITEM].actor; actor != NULL; actor = actor->next_actor) {
+        if (mNtp_is_structure(actor) && actor->npc_id == npc_id && ABS(actor->home.position.x - x) < 1.0f &&
+            ABS(actor->home.position.z - z) < 1.0f) {
+            return (STRUCTURE_ACTOR*)actor;
+        }
+    }
+    return NULL;
+}
+
+/* The structure whose door the local player is using: the door label while entering,
+ * the nearest structure while walking out of one. */
+static STRUCTURE_ACTOR* mNtp_local_door_actor(GAME_PLAY* play) {
+    PLAYER_ACTOR* player = GET_PLAYER_ACTOR(play);
+    ACTOR* label = (ACTOR*)player->get_door_label_proc((GAME*)play);
+    ACTOR* actor;
+    STRUCTURE_ACTOR* best = NULL;
+    f32 best_dist = mNtp_DOOR_EXIT_RADIUS;
+
+    if (label != NULL) {
+        return mNtp_is_structure(label) ? (STRUCTURE_ACTOR*)label : NULL;
+    }
+    if (!mPlib_check_player_outdoor_start((GAME*)play)) {
+        return NULL;
+    }
+
+    for (actor = play->actor_info.list[ACTOR_PART_ITEM].actor; actor != NULL; actor = actor->next_actor) {
+        if (mNtp_is_structure(actor)) {
+            f32 dist = search_position_distanceXZ(&actor->world.position, &player->actor_class.world.position);
+
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = (STRUCTURE_ACTOR*)actor;
+            }
+        }
+    }
+    return best;
+}
+
+static void mNtp_send_door(GAME_PLAY* play) {
+    STRUCTURE_ACTOR* str = mNtp_local_door_actor(play);
+    cKF_SkeletonInfo_R_c* kf;
+    mNtp_door_c m;
+
+    if (str == NULL || str->keyframe.animation == NULL) {
+        return;
+    }
+    kf = &str->keyframe;
+    m.npc_id = str->actor_class.npc_id;
+    m.pad = 0;
+    m.scene_no = Save_Get(scene_no);
+    m.field_id = mFI_GetFieldId();
+    m.home_x = str->actor_class.home.position.x;
+    m.home_z = str->actor_class.home.position.z;
+    m.anim_ofs = (u32)kf->animation - pc_image_base;
+    m.start_frame = kf->frame_control.start_frame;
+    m.end_frame = kf->frame_control.end_frame;
+    m.current_frame = kf->frame_control.current_frame;
+    m.speed = kf->frame_control.speed;
+    m.mode = kf->frame_control.mode;
+    pc_net_send(PC_NET_MSG_DOOR, &m, sizeof(m));
+}
+
+static void mNtp_pose_structure(STRUCTURE_ACTOR* str) {
+    f32 frame = str->keyframe.frame_control.current_frame;
+
+    cKF_SkeletonInfo_R_play(&str->keyframe);
+    str->keyframe.frame_control.current_frame = frame;
+}
+
+static void mNtp_release_door(GAME_PLAY* play) {
+    STRUCTURE_ACTOR* str = l_ntp.door_actor;
+
+    l_ntp.door_actor = NULL;
+    /* Only touch it if it is still loaded (it may have unloaded with its block). */
+    if (str != NULL && mNtp_find_structure(play, l_ntp.remote_door.npc_id, l_ntp.remote_door.home_x,
+                                           l_ntp.remote_door.home_z) == str) {
+        str->keyframe = l_ntp.door_saved_keyframe;
+        mNtp_pose_structure(str);
+    }
+}
+
+static void mNtp_apply_remote_door(GAME_PLAY* play) {
+    mNtp_door_c* m = &l_ntp.remote_door;
+    STRUCTURE_ACTOR* str;
+    cKF_FrameControl_c* fc;
+
+    if (!l_ntp.have_remote_door) {
+        if (l_ntp.door_actor != NULL) {
+            mNtp_release_door(play);
+        }
+        return;
+    }
+    if (l_ntp.frame - l_ntp.remote_door_frame > mNtp_DOOR_TIMEOUT_FRAMES || m->scene_no != Save_Get(scene_no) ||
+        m->field_id != mFI_GetFieldId() || m->anim_ofs >= pc_image_end - pc_image_base) {
+        l_ntp.have_remote_door = FALSE;
+        mNtp_release_door(play);
+        return;
+    }
+
+    str = mNtp_find_structure(play, m->npc_id, m->home_x, m->home_z);
+    if (str == NULL) {
+        return;
+    }
+    if (l_ntp.door_actor != str) {
+        mNtp_release_door(play);
+        l_ntp.door_actor = str;
+        l_ntp.door_saved_keyframe = str->keyframe;
+    }
+
+    fc = &str->keyframe.frame_control;
+    str->keyframe.animation = (cKF_Animation_R_c*)(pc_image_base + m->anim_ofs);
+    fc->start_frame = m->start_frame;
+    fc->end_frame = m->end_frame;
+    fc->max_frames = str->keyframe.animation->frames;
+    fc->speed = m->speed; /* lets the structure's own door sounds fire on the right frames */
+    fc->mode = m->mode;
+    fc->current_frame = m->current_frame;
+    mNtp_pose_structure(str);
 }
 
 /* --- per frame (from the local player's move) --- */
@@ -490,7 +706,9 @@ void mNtp_player_update(GAME* game, const PcNetPlayerState* local) {
 
     if (l_ntp.synced) {
         mNtp_send_diffs();
+        mNtp_send_door((GAME_PLAY*)game);
     }
+    mNtp_apply_remote_door((GAME_PLAY*)game);
 }
 
 int mNtp_get_remote(PcNetPlayerState* out) {

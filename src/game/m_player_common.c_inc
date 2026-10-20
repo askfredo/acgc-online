@@ -6346,6 +6346,24 @@ static int Player_actor_Check_able_shake_tree_table(ACTOR* actorx, int tree_ut_x
     return TRUE;
 }
 
+#ifdef TARGET_PC
+static int Player_actor_Set_shake_tree_table_local(ACTOR* actorx, GAME* game, mActor_name_t item, int tree_ut_x,
+                                                   int tree_ut_z, int little_flag);
+
+/* Netplay: the other resident sees the same tree sway. */
+static int Player_actor_Set_shake_tree_table(ACTOR* actorx, GAME* game, mActor_name_t item, int tree_ut_x,
+                                             int tree_ut_z, int little_flag) {
+    extern void mNtp_send_tree_shake(u16 item, int ut_x, int ut_z, int little);
+
+    if (Player_actor_Set_shake_tree_table_local(actorx, game, item, tree_ut_x, tree_ut_z, little_flag)) {
+        mNtp_send_tree_shake(item, tree_ut_x, tree_ut_z, little_flag);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+#define Player_actor_Set_shake_tree_table Player_actor_Set_shake_tree_table_local
+#endif
 static int Player_actor_Set_shake_tree_table(ACTOR* actorx, GAME* game, mActor_name_t item, int tree_ut_x,
                                              int tree_ut_z, int little_flag) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
@@ -6422,6 +6440,9 @@ static int Player_actor_Set_shake_tree_table(ACTOR* actorx, GAME* game, mActor_n
 
     return FALSE;
 }
+#ifdef TARGET_PC
+#undef Player_actor_Set_shake_tree_table
+#endif
 
 static void Player_actor_check_little_shake_tree(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;

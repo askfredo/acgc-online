@@ -32,6 +32,31 @@ typedef struct {
 
 static Player_ghost_c l_player_ghost;
 
+extern int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little);
+
+/* Replay trees the other resident shook: the sway effect and the leaves' sound only. */
+static void Player_actor_ghost_shake_trees(ACTOR* actorx, GAME* game) {
+    u16 item;
+    int ut_x;
+    int ut_z;
+    int little;
+
+    while (mNtp_pop_tree_shake(&item, &ut_x, &ut_z, &little)) {
+        xyz_t pos;
+
+        if (mFI_GET_TYPE(mFI_GetFieldId()) != mFI_FIELD_FG || !mFI_UtNum2CenterWpos(&pos, ut_x, ut_z)) {
+            continue;
+        }
+        if (Player_actor_Set_shake_tree_table_local(actorx, game, item, ut_x, ut_z, little)) {
+            if (little) {
+                Player_actor_sound_tree_touch(&pos);
+            } else {
+                Player_actor_sound_tree_yurasu(&pos);
+            }
+        }
+    }
+}
+
 static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
     PcNetPlayerState state;
@@ -56,6 +81,7 @@ static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     state.cloth_idx = Now_Private->cloth.idx;
     state.player_no = Common_Get(player_no);
     mNtp_player_update(game, &state);
+    Player_actor_ghost_shake_trees(actorx, game);
 }
 
 static void Player_actor_ghost_update_look(Player_ghost_c* ghost, const PcNetPlayerState* remote) {

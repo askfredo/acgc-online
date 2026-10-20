@@ -589,6 +589,14 @@ static void mNtp_send_door(GAME_PLAY* play) {
     pc_net_send(PC_NET_MSG_DOOR, &m, sizeof(m));
 }
 
+extern void aMHS_PC_set_door_open(ACTOR* actorx, int open);
+
+static void mNtp_set_door_open(STRUCTURE_ACTOR* str, int open) {
+    if (str->actor_class.id == mAc_PROFILE_MYHOUSE) {
+        aMHS_PC_set_door_open((ACTOR*)str, open);
+    }
+}
+
 static void mNtp_pose_structure(STRUCTURE_ACTOR* str) {
     f32 frame = str->keyframe.frame_control.current_frame;
 
@@ -605,6 +613,7 @@ static void mNtp_release_door(GAME_PLAY* play) {
                                            l_ntp.remote_door.home_z) == str) {
         str->keyframe = l_ntp.door_saved_keyframe;
         mNtp_pose_structure(str);
+        mNtp_set_door_open(str, FALSE);
     }
 }
 
@@ -645,6 +654,7 @@ static void mNtp_apply_remote_door(GAME_PLAY* play) {
     fc->mode = m->mode;
     fc->current_frame = m->current_frame;
     mNtp_pose_structure(str);
+    mNtp_set_door_open(str, TRUE);
 }
 
 /* --- per frame (from the local player's move) --- */

@@ -34,7 +34,7 @@ enum {
     PC_NET_MSG_DOOR,        /* both: a structure's door animation frame (visual only) */
 };
 
-#define PC_NET_PROTOCOL_VERSION 3
+#define PC_NET_PROTOCOL_VERSION 4
 
 typedef struct {
     int32_t scene_no;
@@ -49,8 +49,23 @@ typedef struct {
     uint8_t mouth_tex_idx;
     uint16_t cloth_idx;
     uint8_t player_no;
-    uint8_t pad;
+    int8_t part_table_idx; /* upper/lower body split between the two animations */
+    int16_t anim1_idx;
+    int16_t pad;
+    float anim1_frame;
+    /* held tool: skeleton/animation are static data, sent as offsets in the executable */
+    int8_t item_main;
+    int8_t pad2;
+    int16_t item_shape;
+    uint32_t item_skel_ofs;
+    uint32_t item_anim_ofs;
+    float item_frame;
+    float item_scale;
+    int16_t net_angle[3];
+    int16_t pad3;
 } PcNetPlayerState;
+
+#define PC_NET_NO_OFS 0xFFFFFFFFu
 
 extern int g_pc_net_mode;
 extern char g_pc_net_addr[64];

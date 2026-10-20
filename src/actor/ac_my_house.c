@@ -199,6 +199,14 @@ static void aMHS_actor_ct(ACTOR* actorx, GAME* game) {
     aMHS_door_closed_flag[my_house->arg0] = TRUE;
 }
 
+#ifdef TARGET_PC
+/* Netplay: the door is drawn shut unless this flag is cleared, so a door animation
+ * driven by the other resident needs it open too. */
+extern void aMHS_PC_set_door_open(ACTOR* actorx, int open) {
+    aMHS_door_closed_flag[((STRUCTURE_ACTOR*)actorx)->arg0] = !open;
+}
+#endif
+
 static void aMHS_actor_dt(ACTOR* actorx, GAME* game) {
     STRUCTURE_ACTOR* my_house = (STRUCTURE_ACTOR*)actorx;
     int house_idx = actorx->npc_id - HOUSE0;

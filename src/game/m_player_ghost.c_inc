@@ -2,28 +2,51 @@
  *
  * The ghost is not an actor. The local player sends its state over the network
  * every frame (m_netplay.c), and the local player's draw also renders the remote
- * player's skeleton at the received position, with the received animation and
- * with the remote resident's own face and clothes loaded into private buffers. */
+ * player's skeleton at the received position, with the received body animations
+ * (lower and upper body, like the real player), the remote resident's own face and
+ * clothes, and the tool in its hand. */
 
 #ifdef TARGET_PC
 #include "pc_net.h"
 
 extern void mNtp_player_update(GAME* game, const PcNetPlayerState* local);
 extern int mNtp_get_remote(PcNetPlayerState* out);
+extern int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little);
 extern void mPlib_PC_Load_FaceTexAndPallet(u8* tex_p, u16* pal_p, int sex, int face);
+extern unsigned int pc_image_base;
+extern unsigned int pc_image_end;
 
 #define Player_GHOST_FACE_TEX_SIZE 0xE00
+#define Player_GHOST_HAND_JOINT 20
+#define Player_GHOST_NET_JOINT 3
 
 typedef struct {
-    cKF_SkeletonInfo_R_c keyframe;
+    cKF_SkeletonInfo_R_c keyframe0;
+    cKF_SkeletonInfo_R_c keyframe1;
     s_xyz joint_data[mPlayer_JOINT_NUM + 1];
     s_xyz morph_data[mPlayer_JOINT_NUM + 1];
+    s_xyz joint_data1[mPlayer_JOINT_NUM + 1];
+    s_xyz morph_data1[mPlayer_JOINT_NUM + 1];
+    s8 part_table[mPlayer_JOINT_NUM + 1];
     Mtx work_mtx[2][13];
+    MtxF right_hand_mtx;
+    int hand_valid;
+
+    cKF_SkeletonInfo_R_c item_keyframe;
+    s_xyz item_joint_data[8];
+    s_xyz item_morph_data[8];
+    Mtx item_work_mtx[2][4];
+    u32 item_skel_ofs;
+    u32 item_anim_ofs;
+    s_xyz net_angle;
+
     u8 face_tex[Player_GHOST_FACE_TEX_SIZE] ATTRIBUTE_ALIGN(32);
     u16 face_pal[16] ATTRIBUTE_ALIGN(32);
     u8 cloth_tex[mNW_DESIGN_TEX_SIZE] ATTRIBUTE_ALIGN(32);
     u16 cloth_pal[16] ATTRIBUTE_ALIGN(32);
     int anim_idx;
+    int anim1_idx;
+    int part_table_idx;
     int gender;
     int face;
     int cloth_idx;
@@ -32,7 +55,21 @@ typedef struct {
 
 static Player_ghost_c l_player_ghost;
 
-extern int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little);
+static u32 Player_actor_ghost_exe_ofs(const void* p) {
+    u32 addr = (u32)p;
+
+    if (p == NULL || addr < pc_image_base || addr >= pc_image_end) {
+        return PC_NET_NO_OFS;
+    }
+    return addr - pc_image_base;
+}
+
+static void* Player_actor_ghost_exe_ptr(u32 ofs) {
+    if (ofs == PC_NET_NO_OFS || ofs >= pc_image_end - pc_image_base) {
+        return NULL;
+    }
+    return (void*)(pc_image_base + ofs);
+}
 
 /* Replay trees the other resident shook: the sway effect and the leaves' sound only. */
 static void Player_actor_ghost_shake_trees(ACTOR* actorx, GAME* game) {
@@ -74,12 +111,26 @@ static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     state.angle_y = actorx->shape_info.rotation.y;
     state.anim_idx = (s16)player->animation0_idx;
     state.anim_frame = player->keyframe0.frame_control.current_frame;
+    state.anim1_idx = (s16)player->animation1_idx;
+    state.anim1_frame = player->keyframe1.frame_control.current_frame;
+    state.part_table_idx = (s8)player->part_table_idx;
     state.gender = Now_Private->gender;
     state.face = Now_Private->face;
     state.eye_tex_idx = player->eye_tex_idx;
     state.mouth_tex_idx = player->mouth_tex_idx;
     state.cloth_idx = Now_Private->cloth.idx;
     state.player_no = Common_Get(player_no);
+
+    state.item_main = (s8)player->now_item_main_index;
+    state.item_shape = (s16)player->item_shape_type[player->item_bank_idx & 1];
+    state.item_skel_ofs = Player_actor_ghost_exe_ofs(player->item_keyframe.skeleton);
+    state.item_anim_ofs = Player_actor_ghost_exe_ofs(player->item_keyframe.animation);
+    state.item_frame = player->item_keyframe.frame_control.current_frame;
+    state.item_scale = player->item_scale;
+    state.net_angle[0] = player->net_angle.x;
+    state.net_angle[1] = player->net_angle.y;
+    state.net_angle[2] = player->net_angle.z;
+
     mNtp_player_update(game, &state);
     Player_actor_ghost_shake_trees(actorx, game);
 }
@@ -88,8 +139,11 @@ static void Player_actor_ghost_update_look(Player_ghost_c* ghost, const PcNetPla
     if (!ghost->ready || ghost->gender != remote->gender) {
         cKF_Skeleton_R_c* skeleton = remote->gender == mPr_SEX_MALE ? &cKF_bs_r_boy_1 : &cKF_bs_r_grl_1;
 
-        cKF_SkeletonInfo_R_ct(&ghost->keyframe, skeleton, NULL, ghost->joint_data, ghost->morph_data);
+        cKF_SkeletonInfo_R_ct(&ghost->keyframe0, skeleton, NULL, ghost->joint_data, ghost->morph_data);
+        cKF_SkeletonInfo_R_ct(&ghost->keyframe1, skeleton, NULL, ghost->joint_data1, ghost->morph_data1);
         ghost->anim_idx = -1;
+        ghost->anim1_idx = -1;
+        ghost->part_table_idx = -1;
         ghost->face = -1;
     }
 
@@ -107,11 +161,120 @@ static void Player_actor_ghost_update_look(Player_ghost_c* ghost, const PcNetPla
     ghost->ready = TRUE;
 }
 
+/* Pose a skeleton at exactly the remote frame. */
+static void Player_actor_ghost_set_anim(cKF_SkeletonInfo_R_c* kf, int* cur_idx, int idx, f32 frame) {
+    if (*cur_idx != idx) {
+        cKF_SkeletonInfo_R_init_standard_repeat(kf, mPlib_Get_Pointer_Animation(idx), NULL);
+        *cur_idx = idx;
+    }
+    kf->frame_control.speed = 0.0f;
+    kf->frame_control.current_frame = frame;
+}
+
+static void Player_actor_ghost_pose(Player_ghost_c* ghost, const PcNetPlayerState* remote) {
+    int use_parts = remote->anim1_idx >= 0 && remote->anim1_idx < mPlayer_ANIM_NUM && remote->part_table_idx >= 0 &&
+                    remote->part_table_idx < mPlayer_PART_TABLE_NUM;
+
+    Player_actor_ghost_set_anim(&ghost->keyframe0, &ghost->anim_idx, remote->anim_idx, remote->anim_frame);
+
+    if (use_parts) {
+        Player_actor_ghost_set_anim(&ghost->keyframe1, &ghost->anim1_idx, remote->anim1_idx, remote->anim1_frame);
+        if (ghost->part_table_idx != remote->part_table_idx) {
+            mPlib_DMA_player_Part_Table(ghost->part_table, remote->part_table_idx);
+            ghost->part_table_idx = remote->part_table_idx;
+        }
+        cKF_SkeletonInfo_R_combine_play(&ghost->keyframe0, &ghost->keyframe1, ghost->part_table);
+    } else {
+        cKF_SkeletonInfo_R_play(&ghost->keyframe0);
+    }
+}
+
+static int Player_actor_ghost_draw_After(GAME* game, cKF_SkeletonInfo_R_c* kf, int joint_no, Gfx** gfx_pp,
+                                         u8* work_flag, void* arg, s_xyz* rot, xyz_t* pos) {
+    Player_ghost_c* ghost = (Player_ghost_c*)arg;
+
+    if (joint_no == Player_GHOST_HAND_JOINT) {
+        Matrix_get(&ghost->right_hand_mtx);
+        ghost->hand_valid = TRUE;
+    }
+    return TRUE;
+}
+
+static int Player_actor_ghost_item_After(GAME* game, cKF_SkeletonInfo_R_c* kf, int joint_no, Gfx** gfx_pp,
+                                         u8* work_flag, void* arg, s_xyz* rot, xyz_t* pos) {
+    Player_ghost_c* ghost = (Player_ghost_c*)arg;
+
+    if (joint_no == Player_GHOST_NET_JOINT) {
+        Matrix_rotateXYZ(ghost->net_angle.x, ghost->net_angle.y, ghost->net_angle.z, MTX_MULT);
+    }
+    return TRUE;
+}
+
+/* The tool in the ghost's hand: animated tools (net, rod, windmill) have their own
+ * skeleton, the others (axe, shovel, fan) are a single model. Tools that are separate
+ * actors (umbrella, balloon) are not drawn. */
+static void Player_actor_ghost_draw_item(Player_ghost_c* ghost, const PcNetPlayerState* remote, GAME* game) {
+    GRAPH* graph = game->graph;
+    cKF_Skeleton_R_c* skel = (cKF_Skeleton_R_c*)Player_actor_ghost_exe_ptr(remote->item_skel_ofs);
+    cKF_Animation_R_c* anim = (cKF_Animation_R_c*)Player_actor_ghost_exe_ptr(remote->item_anim_ofs);
+    int skeletal = skel != NULL && anim != NULL && remote->item_main != mPlayer_ITEM_MAIN_AXE_NORMAL &&
+                   remote->item_main != mPlayer_ITEM_MAIN_SCOOP_NORMAL &&
+                   remote->item_main != mPlayer_ITEM_MAIN_FAN_NORMAL;
+    Mtx* mtx;
+
+    if (!ghost->hand_valid || remote->item_main <= mPlayer_ITEM_MAIN_NONE || remote->item_main >= mPlayer_ITEM_MAIN_NUM ||
+        remote->item_main == mPlayer_ITEM_MAIN_UMBRELLA_NORMAL ||
+        remote->item_main == mPlayer_ITEM_MAIN_BALLOON_NORMAL) {
+        return;
+    }
+    if (!skeletal && (!mPlayer_ITEM_DATA_VALID(remote->item_shape) ||
+                      mPlib_Get_Item_DataPointerType(remote->item_shape) != mPlayer_ITEM_DATA_TYPE_GFX)) {
+        return;
+    }
+
+    Matrix_push();
+    Matrix_put(&ghost->right_hand_mtx);
+    if (remote->item_scale > 0.0f && remote->item_scale != 1.0f) {
+        Matrix_scale(remote->item_scale, remote->item_scale, remote->item_scale, MTX_MULT);
+    }
+    mtx = _Matrix_to_Mtx_new(graph);
+    if (mtx != NULL) {
+        _texture_z_light_fog_prim(graph);
+        OPEN_POLY_OPA_DISP(graph);
+        gSPMatrix(POLY_OPA_DISP++, mtx, G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        if (!skeletal) {
+            gSPDisplayList(POLY_OPA_DISP++, mPlib_Get_Item_DataPointer(remote->item_shape));
+        }
+        CLOSE_POLY_OPA_DISP(graph);
+
+        if (skeletal) {
+            if (ghost->item_skel_ofs != remote->item_skel_ofs) {
+                cKF_SkeletonInfo_R_ct(&ghost->item_keyframe, skel, NULL, ghost->item_joint_data,
+                                      ghost->item_morph_data);
+                ghost->item_skel_ofs = remote->item_skel_ofs;
+                ghost->item_anim_ofs = PC_NET_NO_OFS;
+            }
+            if (ghost->item_anim_ofs != remote->item_anim_ofs) {
+                cKF_SkeletonInfo_R_init_standard_repeat(&ghost->item_keyframe, anim, NULL);
+                ghost->item_anim_ofs = remote->item_anim_ofs;
+            }
+            ghost->item_keyframe.frame_control.speed = 0.0f;
+            ghost->item_keyframe.frame_control.current_frame = remote->item_frame;
+            cKF_SkeletonInfo_R_play(&ghost->item_keyframe);
+            ghost->net_angle.x = remote->net_angle[0];
+            ghost->net_angle.y = remote->net_angle[1];
+            ghost->net_angle.z = remote->net_angle[2];
+            cKF_Si3_draw_R_SV(game, &ghost->item_keyframe, ghost->item_work_mtx[game->frame_counter % 2], NULL,
+                              &Player_actor_ghost_item_After, ghost);
+        }
+    }
+    Matrix_pull();
+}
+
 /* Called at the end of the local player's normal draw, so the scene's lights are set up. */
 static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     Player_ghost_c* ghost = &l_player_ghost;
     PcNetPlayerState remote;
-    cKF_Animation_R_c* anim;
     s_xyz rot;
     u8* eye_tex_p;
     u8* mouth_tex_p;
@@ -129,20 +292,7 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     }
 
     Player_actor_ghost_update_look(ghost, &remote);
-
-    anim = mPlib_Get_Pointer_Animation(remote.anim_idx);
-    if (anim == NULL) {
-        return;
-    }
-    if (ghost->anim_idx != remote.anim_idx) {
-        cKF_SkeletonInfo_R_init_standard_repeat(&ghost->keyframe, anim, NULL);
-        ghost->anim_idx = remote.anim_idx;
-    }
-
-    /* Pose the skeleton at exactly the remote frame. */
-    ghost->keyframe.frame_control.speed = 0.0f;
-    ghost->keyframe.frame_control.current_frame = remote.anim_frame;
-    cKF_SkeletonInfo_R_play(&ghost->keyframe);
+    Player_actor_ghost_pose(ghost, &remote);
 
     eye_tex_p = ghost->face_tex + remote.eye_tex_idx * 0x100;
     mouth_tex_p = ghost->face_tex + (mPlayer_EYE_TEX_NUM + remote.mouth_tex_idx) * 0x100;
@@ -159,11 +309,15 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     rot.y = remote.angle_y;
     rot.z = 0;
 
+    ghost->hand_valid = FALSE;
     Matrix_push();
     Matrix_softcv3_load(&rot, remote.pos[0], remote.pos[1] + actorx->shape_info.ofs_y * actorx->scale.y,
                         remote.pos[2]);
     Matrix_scale(actorx->scale.x, actorx->scale.y, actorx->scale.z, MTX_MULT);
-    cKF_Si3_draw_R_SV(game, &ghost->keyframe, ghost->work_mtx[game->frame_counter % 2], NULL, NULL, NULL);
+    cKF_Si3_draw_R_SV(game, &ghost->keyframe0, ghost->work_mtx[game->frame_counter % 2], NULL,
+                      &Player_actor_ghost_draw_After, ghost);
     Matrix_pull();
+
+    Player_actor_ghost_draw_item(ghost, &remote, game);
 }
 #endif

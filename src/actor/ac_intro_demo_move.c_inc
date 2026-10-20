@@ -343,6 +343,14 @@ static void aID_actor_move(ACTOR* actorx, GAME* game) {
         mQst_errand_c* errand;
         PLAYER_ACTOR* player = GET_PLAYER_ACTOR(play);
 
+#ifdef TARGET_PC
+        /* House 0 belongs to the first resident; later residents get the first free house. */
+        for (house_idx = 0; house_idx < PLAYER_NUM - 1; house_idx++) {
+            if (mPr_NullCheckPersonalID(&Save_Get(homes[house_idx]).ownerID)) {
+                break;
+            }
+        }
+#endif
         mHS_set_use(Common_Get(player_no), house_idx);
         mPr_SetItemCollectBit(Now_Private->cloth.item);
         mHm_SetNowHome();

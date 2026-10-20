@@ -62,6 +62,28 @@ int pc_cloud_on_first_save(const char* town_name);
  * hosted from now on; it becomes this PC's home town) and get its invite code. Already
  * online: just the code. Returns 0 with err on failure. */
 int pc_cloud_go_online(const char* town_name, char* code, int code_size, char* err, int err_size);
+/* --- world map (towns their owners published) --- */
+
+typedef struct {
+    char id[32];
+    char name[48];
+    int residents;
+    int free_slots;
+    int playing; /* someone is in it right now */
+    int mine;    /* this player lives there */
+    float x;     /* stable spot on the map, 0..1 */
+    float y;
+} PcWorldTown;
+
+#define PC_WORLD_MAX_TOWNS 100
+
+/* Returns the number of towns on the map, or -1 on error. */
+int pc_cloud_world(PcWorldTown* out, int max, char* err, int err_size);
+/* List (or unlist) the town being played on the world map; owner only. */
+int pc_cloud_set_public(int is_public, char* err, int err_size);
+/* Become a resident of a town on the map (no ticket needed). */
+int pc_cloud_move_in(const char* town_id, PcCloudTown* out, char* err, int err_size);
+
 /* The town this PC opens at start when no option says otherwise ("" = the offline save). */
 const char* pc_cloud_home_town(void);
 /* After loading settings: play the home town from the cloud unless told otherwise. */

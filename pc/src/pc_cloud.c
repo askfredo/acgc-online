@@ -36,6 +36,7 @@ static char s_token[128] = "";
 static char s_pass[64] = ""; /* only for the automatic account */
 static char s_home[32] = "";  /* home town id ("" = offline save) */
 static int s_new_town_pending = 0;
+static int s_upload_boot_save = 0; /* the boot save came from this PC: send it up */
 
 enum {
     PC_CLOUD_CMD_NONE,
@@ -720,6 +721,31 @@ int pc_cloud_on_first_save(const char* town_name) {
     return 1;
 }
 
+#define PC_CLOUD_OFFLINE_SAVE "save/DobutsunomoriP_MURA.gci"
+
+/* The offline save on disk (the last time the town was saved before going online). */
+static uint8_t* pc_cloud_read_offline_save(uint32_t* size) {
+    FILE* f = fopen(PC_CLOUD_OFFLINE_SAVE, "rb");
+    uint8_t* buf;
+    long n;
+
+    if (f == NULL) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    buf = (n > 64 && n < 2 * 1024 * 1024) ? (uint8_t*)malloc(n) : NULL;
+    if (buf == NULL || fread(buf, 1, n, f) != (size_t)n || memcmp(buf, "GAF", 3) != 0) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    *size = (uint32_t)n;
+    return buf;
+}
+
 int pc_cloud_go_online(const char* town_name, char* code, int code_size, char* err, int err_size) {
     PcCloudTown town;
     PcHttpResponse resp;
@@ -756,11 +782,104 @@ int pc_cloud_go_online(const char* town_name, char* code, int code_size, char* e
     s_save_version = 0;
     g_pc_cloud_mode = 1;
     pc_cloud_open_session();
+    {
+        /* Upload the last save right away, so the town is never empty online even if the
+         * game isn't saved again before quitting. */
+        uint32_t size;
+        uint8_t* save = pc_cloud_read_offline_save(&size);
+
+        if (save != NULL) {
+            pc_cloud_queue_upload(save, size);
+            free(save);
+        }
+    }
     /* This town now lives online: open it at start from here on. */
     snprintf(s_home, sizeof(s_home), "%s", town.id);
     pc_cloud_save_ini();
     snprintf(code, code_size, "%s", town.code);
     printf("[Cloud] %s is online now (code %s)\n", town.name, town.code);
+    return 1;
+}
+
+int pc_cloud_world(PcWorldTown* out, int max, char* err, int err_size) {
+    PcHttpResponse resp;
+    const char* p;
+    int n = 0;
+
+    pc_cloud_call("GET", "/api/v1/world", NULL, NULL, 0, &resp);
+    if (resp.status != 200) {
+        pc_cloud_error_text(&resp, err, err_size);
+        pc_http_free(&resp);
+        return -1;
+    }
+    p = pc_json_ws((const char*)resp.body);
+    if (*p == '[') {
+        p = pc_json_ws(p + 1);
+        while (*p == '{' && n < max) {
+            PcWorldTown* t = &out[n++];
+            const char* v;
+
+            memset(t, 0, sizeof(*t));
+            pc_json_get_str(p, "id", t->id, sizeof(t->id));
+            pc_json_get_str(p, "name", t->name, sizeof(t->name));
+            t->residents = pc_json_get_int(p, "residents");
+            t->free_slots = pc_json_get_int(p, "free_slots");
+            v = pc_json_get(p, "playing");
+            t->playing = v != NULL && strncmp(v, "true", 4) == 0;
+            v = pc_json_get(p, "mine");
+            t->mine = v != NULL && strncmp(v, "true", 4) == 0;
+            v = pc_json_get(p, "x");
+            t->x = v != NULL ? (float)atof(v) : 0.5f;
+            v = pc_json_get(p, "y");
+            t->y = v != NULL ? (float)atof(v) : 0.5f;
+
+            p = pc_json_skip(p);
+            if (p == NULL) {
+                break;
+            }
+            p = pc_json_ws(p);
+            if (*p == ',') {
+                p = pc_json_ws(p + 1);
+            }
+        }
+    }
+    pc_http_free(&resp);
+    return n;
+}
+
+int pc_cloud_set_public(int is_public, char* err, int err_size) {
+    PcHttpResponse resp;
+    char path[96];
+    const char* body = is_public ? "{\"public\":true}" : "{\"public\":false}";
+    int ok;
+
+    if (!g_pc_cloud_mode) {
+        snprintf(err, err_size, "this town is not online");
+        return 0;
+    }
+    snprintf(path, sizeof(path), "/api/v1/towns/%s/public", g_pc_cloud_town);
+    pc_cloud_call("POST", path, NULL, body, (uint32_t)strlen(body), &resp);
+    ok = resp.status == 200;
+    if (!ok) {
+        pc_cloud_error_text(&resp, err, err_size);
+    }
+    pc_http_free(&resp);
+    return ok;
+}
+
+int pc_cloud_move_in(const char* town_id, PcCloudTown* out, char* err, int err_size) {
+    PcHttpResponse resp;
+    char path[96];
+
+    snprintf(path, sizeof(path), "/api/v1/towns/%s/move-in", town_id);
+    pc_cloud_call("POST", path, NULL, "{}", 2, &resp);
+    if (resp.status != 200) {
+        pc_cloud_error_text(&resp, err, err_size);
+        pc_http_free(&resp);
+        return 0;
+    }
+    pc_cloud_parse_town((const char*)resp.body, out);
+    pc_http_free(&resp);
     return 1;
 }
 
@@ -813,6 +932,12 @@ void pc_cloud_start(void) {
         s_save_version = atoi(resp.save_version);
         resp.body = NULL;
         printf("[Cloud] town %s downloaded (version %d)\n", g_pc_cloud_town, s_save_version);
+    } else if (resp.status == 404 && strcmp(g_pc_cloud_town, s_home) == 0 &&
+               (s_boot_save = pc_cloud_read_offline_save(&s_boot_save_size)) != NULL) {
+        /* Home town that went online but never got its save up: use the one on this PC. */
+        s_save_version = 0;
+        s_upload_boot_save = 1;
+        printf("[Cloud] home town %s is empty online: using this PC's save\n", g_pc_cloud_town);
     } else if (resp.status == 404) {
         s_save_version = 0;
         printf("[Cloud] town %s has no save yet: starting a new town\n", g_pc_cloud_town);
@@ -824,6 +949,10 @@ void pc_cloud_start(void) {
     pc_http_free(&resp);
 
     pc_cloud_open_session();
+    if (s_upload_boot_save) {
+        pc_cloud_queue_upload(s_boot_save, s_boot_save_size);
+        s_upload_boot_save = 0;
+    }
 }
 
 /* Upload the pending save; on success it is cleared. Returns 0 if it must be retried.

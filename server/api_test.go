@@ -249,3 +249,54 @@ func TestBackupsArePruned(t *testing.T) {
 func filepathGlob(dir, townID string) ([]string, error) {
 	return filepath.Glob(filepath.Join(dir, "towns", townID, "backups", "save.*.gci"))
 }
+
+func TestWorldMap(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	ana := registerUser(t, srv.URL, "ana")
+	beto := registerUser(t, srv.URL, "beto")
+
+	var town townResponse
+	ana.json("POST", "/api/v1/towns", map[string]string{"name": "Hojita"}, &town, http.StatusCreated)
+
+	// Private by default: not on the map, can't move in without the ticket.
+	var world []worldTown
+	beto.json("GET", "/api/v1/world", nil, &world, http.StatusOK)
+	if len(world) != 0 {
+		t.Fatalf("private town on the map: %+v", world)
+	}
+	beto.json("POST", "/api/v1/towns/"+town.ID+"/move-in", nil, nil, http.StatusNotFound)
+
+	// Only the owner publishes.
+	beto.json("POST", "/api/v1/towns/"+town.ID+"/public", map[string]bool{"public": true}, nil, http.StatusForbidden)
+	ana.json("POST", "/api/v1/towns/"+town.ID+"/public", map[string]bool{"public": true}, nil, http.StatusOK)
+
+	beto.json("GET", "/api/v1/world", nil, &world, http.StatusOK)
+	if len(world) != 1 || world[0].Name != "Hojita" || world[0].Mine || world[0].FreeSlots != 3 {
+		t.Fatalf("world: %+v", world)
+	}
+	x, y := world[0].X, world[0].Y
+	if x <= 0 || x >= 1 || y <= 0 || y >= 1 {
+		t.Fatalf("map spot out of range: %v %v", x, y)
+	}
+
+	// Strangers see whether someone is playing, never who.
+	ana.json("POST", "/api/v1/towns/"+town.ID+"/lock", nil, nil, http.StatusOK)
+	var raw []map[string]any
+	beto.json("GET", "/api/v1/world", nil, &raw, http.StatusOK)
+	if raw[0]["playing"] != true || raw[0]["members"] != nil || raw[0]["code"] != nil {
+		t.Fatalf("world leaks or misses data: %+v", raw[0])
+	}
+
+	beto.json("POST", "/api/v1/towns/"+town.ID+"/move-in", nil, nil, http.StatusOK)
+	beto.json("GET", "/api/v1/world", nil, &world, http.StatusOK)
+	if !world[0].Mine || world[0].Residents != 2 || world[0].X != x {
+		t.Fatalf("after moving in: %+v", world)
+	}
+
+	// Unlisting hides it again.
+	ana.json("POST", "/api/v1/towns/"+town.ID+"/public", map[string]bool{"public": false}, nil, http.StatusOK)
+	beto.json("GET", "/api/v1/world", nil, &world, http.StatusOK)
+	if len(world) != 0 {
+		t.Fatalf("unlisted town still on the map")
+	}
+}

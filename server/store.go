@@ -35,6 +35,7 @@ var (
 	errTownFull   = errors.New("town is full")
 	errNotMember  = errors.New("not a resident of this town")
 	errStaleSave  = errors.New("save version is out of date")
+	errNotOwner   = errors.New("only the town's owner can do that")
 	errBadRequest = errors.New("bad request")
 )
 
@@ -52,6 +53,7 @@ type Town struct {
 	Code        string    `json:"code"`
 	Owner       string    `json:"owner"`
 	Members     []string  `json:"members"` // residents, owner first
+	Public      bool      `json:"public"`  // listed on the world map (the owner opts in)
 	Created     time.Time `json:"created"`
 	SaveVersion int       `json:"save_version"` // 0 = no save uploaded yet
 	SaveUpdated time.Time `json:"save_updated,omitzero"`
@@ -222,6 +224,64 @@ func (s *Store) JoinTown(username, code string) (*Town, error) {
 		return nil, errNotFound
 	}
 	t := s.towns[id]
+	if t.isMember(username) {
+		return copyTown(t), nil
+	}
+	if len(t.Members) >= maxResidents {
+		return nil, errTownFull
+	}
+	t.Members = append(t.Members, username)
+	if err := s.saveTownLocked(t); err != nil {
+		t.Members = t.Members[:len(t.Members)-1]
+		return nil, err
+	}
+	return copyTown(t), nil
+}
+
+// SetPublic lists or unlists a town on the world map. Only its owner decides.
+func (s *Store) SetPublic(username, id string, public bool) (*Town, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.towns[id]
+	if !ok {
+		return nil, errNotFound
+	}
+	if t.Owner != username {
+		return nil, errNotOwner
+	}
+	t.Public = public
+	if err := s.saveTownLocked(t); err != nil {
+		t.Public = !public
+		return nil, err
+	}
+	return copyTown(t), nil
+}
+
+// PublicTowns returns the towns on the world map, oldest first.
+func (s *Store) PublicTowns() []*Town {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []*Town
+	for _, t := range s.towns {
+		if t.Public {
+			out = append(out, copyTown(t))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	return out
+}
+
+// MoveIn makes the user a resident of a town on the world map (no ticket needed).
+func (s *Store) MoveIn(username, id string) (*Town, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.towns[id]
+	if !ok || !t.Public {
+		return nil, errNotFound
+	}
 	if t.isMember(username) {
 		return copyTown(t), nil
 	}

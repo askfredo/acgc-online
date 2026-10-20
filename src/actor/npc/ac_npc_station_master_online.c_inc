@@ -7,6 +7,7 @@
 
 #ifdef TARGET_PC
 #include "pc_station.h"
+#include "pc_worldmap.h"
 #include "m_ledit_ovl.h"
 
 enum {
@@ -15,6 +16,10 @@ enum {
     aSTM_PC_TICKET_OPEN_WAIT, /* message window closing */
     aSTM_PC_TICKET_EDIT,      /* keyboard open */
     aSTM_PC_TICKET_SHOW_WAIT, /* message window coming back */
+    aSTM_PC_WORLD_ORDER,      /* "take a look!" is showing */
+    aSTM_PC_WORLD_OPEN_WAIT,  /* message window closing */
+    aSTM_PC_WORLD_MAP,        /* the world map is open */
+    aSTM_PC_WORLD_SHOW_WAIT,  /* message window coming back */
 };
 
 static int aSTM_pc_state;
@@ -41,6 +46,48 @@ static void aSTM_pc_online_talk(NPC_STATION_MASTER_ACTOR* master, GAME_PLAY* pla
             }
             if (pc_msg_take_loaded(PC_STATION_TICKET_MSG)) {
                 aSTM_pc_state = aSTM_PC_TICKET_ORDER;
+            }
+            if (pc_msg_take_loaded(PC_STATION_WORLD_MSG)) {
+                pc_station_world_load();
+                aSTM_pc_state = aSTM_PC_WORLD_ORDER;
+            }
+            if (pc_msg_take_loaded(PC_STATION_MOVE_CHECK_MSG)) {
+                pc_station_move_in();
+            }
+            if (pc_msg_take_loaded(PC_STATION_PUBLIC_YES_MSG)) {
+                pc_station_set_public(TRUE);
+            }
+            if (pc_msg_take_loaded(PC_STATION_PUBLIC_NO_MSG)) {
+                pc_station_set_public(FALSE);
+            }
+            break;
+
+        case aSTM_PC_WORLD_ORDER:
+            if (mDemo_Get_OrderValue(mDemo_ORDER_NPC0, 9) != 0) {
+                mDemo_Set_OrderValue(mDemo_ORDER_NPC0, 9, 0);
+                mMsg_REQUEST_MAIN_DISAPPEAR_WAIT_TYPE1();
+                aSTM_pc_state = aSTM_PC_WORLD_OPEN_WAIT;
+            }
+            break;
+
+        case aSTM_PC_WORLD_OPEN_WAIT:
+            if (mMsg_CHECK_MAIN_WAIT() == TRUE) {
+                pc_station_world_open(); /* takes the controller until it closes */
+                aSTM_pc_state = aSTM_PC_WORLD_MAP;
+            }
+            break;
+
+        case aSTM_PC_WORLD_MAP:
+            if (!pc_worldmap_is_open()) {
+                mMsg_request_main_appear_wait_type1(msg_p);
+                aSTM_pc_state = aSTM_PC_WORLD_SHOW_WAIT;
+            }
+            break;
+
+        case aSTM_PC_WORLD_SHOW_WAIT:
+            if (mMsg_Check_not_series_main_wait(msg_p) == TRUE) {
+                mMsg_ChangeMsgData(msg_p, pc_station_world_done());
+                aSTM_pc_state = aSTM_PC_MENU;
             }
             break;
 

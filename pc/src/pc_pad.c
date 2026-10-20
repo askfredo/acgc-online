@@ -1,4 +1,5 @@
 /* pc_pad.c - GC controller input via SDL gamepad + keyboard */
+#include "pc_worldmap.h"
 #include "pc_platform.h"
 #include "pc_keybindings.h"
 #include <dolphin/pad.h>
@@ -122,6 +123,14 @@ u32 PADRead(PADStatus* status) {
         if (rt > TRIGGER_THRESHOLD) buttons |= PAD_TRIGGER_R;
         status[0].triggerLeft = lt;
         status[0].triggerRight = rt;
+    }
+
+    /* Porter's world map has the controller while it's open: the game sees nothing. */
+    if (pc_worldmap_is_open()) {
+        pc_worldmap_input(buttons, stickX, stickY);
+        buttons = 0;
+        stickX = stickY = cstickX = cstickY = 0;
+        status[0].triggerLeft = status[0].triggerRight = 0;
     }
 
     status[0].button = buttons;

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -53,6 +55,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/towns/{id}/lock", a.auth(a.acquireLock))
 	mux.HandleFunc("POST /api/v1/towns/{id}/lock/renew", a.auth(a.renewLock))
 	mux.HandleFunc("DELETE /api/v1/towns/{id}/lock", a.auth(a.releaseLock))
+
+	mux.HandleFunc("GET /api/v1/world", a.auth(a.world))
+	mux.HandleFunc("POST /api/v1/towns/{id}/public", a.auth(a.setPublic))
+	mux.HandleFunc("POST /api/v1/towns/{id}/move-in", a.auth(a.moveIn))
 	return logRequests(mux)
 }
 
@@ -203,6 +209,78 @@ func (a *API) getTown(w http.ResponseWriter, r *http.Request, user string) {
 		return
 	}
 	writeJSONResponse(w, http.StatusOK, a.townResponse(t))
+}
+
+// --- world map ---
+
+const maxWorldTowns = 100
+
+// worldTown is what strangers see of a town: no member names, no invite code.
+type worldTown struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Residents int     `json:"residents"`
+	FreeSlots int     `json:"free_slots"`
+	Playing   bool    `json:"playing"` // someone is in it right now
+	Mine      bool    `json:"mine"`    // you live there
+	X         float64 `json:"x"`       // stable spot on the map, 0..1
+	Y         float64 `json:"y"`
+}
+
+// mapSpot places a town on the world map from its id, so it never moves.
+func mapSpot(id string) (float64, float64) {
+	h := sha256.Sum256([]byte(id))
+	x := float64(binary.BigEndian.Uint32(h[0:4])) / float64(^uint32(0))
+	y := float64(binary.BigEndian.Uint32(h[4:8])) / float64(^uint32(0))
+	return 0.08 + 0.84*x, 0.12 + 0.76*y // keep clear of the edges
+}
+
+func (a *API) world(w http.ResponseWriter, r *http.Request, user string) {
+	towns := a.store.PublicTowns()
+	if len(towns) > maxWorldTowns {
+		towns = towns[len(towns)-maxWorldTowns:] // the newest ones
+	}
+	out := make([]worldTown, 0, len(towns))
+	for _, t := range towns {
+		x, y := mapSpot(t.ID)
+		out = append(out, worldTown{
+			ID: t.ID, Name: t.Name, Residents: len(t.Members), FreeSlots: maxResidents - len(t.Members),
+			Playing: a.locks.Host(t.ID) != nil, Mine: t.isMember(user), X: x, Y: y,
+		})
+	}
+	writeJSONResponse(w, http.StatusOK, out)
+}
+
+func (a *API) setPublic(w http.ResponseWriter, r *http.Request, user string) {
+	var body struct {
+		Public bool `json:"public"`
+	}
+	if !readJSONBody(w, r, &body) {
+		return
+	}
+	t, err := a.store.SetPublic(user, r.PathValue("id"), body.Public)
+	if errors.Is(err, errNotOwner) {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if writeTownError(w, err) {
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, a.townResponse(t))
+}
+
+func (a *API) moveIn(w http.ResponseWriter, r *http.Request, user string) {
+	t, err := a.store.MoveIn(user, r.PathValue("id"))
+	switch {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, "that town is not on the map")
+	case errors.Is(err, errTownFull):
+		writeError(w, http.StatusConflict, "this town already has 4 residents")
+	case err != nil:
+		internalError(w, err)
+	default:
+		writeJSONResponse(w, http.StatusOK, a.townResponse(t))
+	}
 }
 
 // --- saves ---

@@ -12,6 +12,7 @@
 #include "pc_net.h"
 #include "pc_cloud.h"
 #include "pc_menu.h"
+#include "pc_worldmap.h"
 
 /* prefer discrete GPU on laptops */
 #ifdef _WIN32
@@ -211,6 +212,7 @@ void pc_platform_update_window_size(void) {
 }
 
 void pc_platform_swap_buffers(void) {
+    pc_worldmap_draw(); /* over the game's frame, when Porter shows the map */
     SDL_GL_SwapWindow(g_pc_window);
 }
 
@@ -310,6 +312,7 @@ int main(int argc, char* argv[]) {
 
     s_argv = argv;
     int show_menu = 0;
+    int worldmap_preview = 0; /* development: open the world map at start */
 
     for (int i = 1; i < argc; i++) {
         if (pc_cloud_parse_arg(argc, argv, &i, &cloud_command)) {
@@ -332,6 +335,8 @@ int main(int argc, char* argv[]) {
             printf("  --menu              Open the online town picker before the game\n");
             printf("  --help, -h          Show this help message\n");
             return 0;
+        } else if (strcmp(argv[i], "--worldmap-preview") == 0) {
+            worldmap_preview = 1;
         } else if (strcmp(argv[i], "--menu") == 0) {
             show_menu = 1;
         } else if (strcmp(argv[i], "--no-menu") == 0) {
@@ -438,6 +443,15 @@ int main(int argc, char* argv[]) {
             pc_platform_shutdown();
             return 0;
         }
+    }
+
+    if (worldmap_preview) {
+        static PcWorldTown towns[PC_WORLD_MAX_TOWNS];
+        char err[160];
+        int n = pc_cloud_ensure_account(err, sizeof(err)) ? pc_cloud_world(towns, PC_WORLD_MAX_TOWNS, err, sizeof(err)) : -1;
+
+        printf("[PC] world map preview: %d town(s) %s\n", n, n < 0 ? err : "");
+        pc_worldmap_open(towns, n > 0 ? n : 0);
     }
 
     pc_disc_init();

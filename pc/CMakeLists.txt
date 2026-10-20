@@ -292,6 +292,7 @@ set(PC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_msg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_msg_tables.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_station.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_worldmap.cpp
 )
 
 # Rename game's main() to ac_entry() to avoid conflict with PC main() and game_main(GAME*)
@@ -397,6 +398,18 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${SDL2_INCLUDE_DIRS})
+
+# Rounded font for the world map (SIL Open Font License), copied next to the game
+set(PC_FONT_COMMIT 1866b1b967b78211927c48c9835099c33fb85b3b)
+set(PC_FONT_DIR ${CMAKE_BINARY_DIR}/bin/fonts)
+file(DOWNLOAD
+    https://raw.githubusercontent.com/google/fonts/${PC_FONT_COMMIT}/ofl/varelaround/VarelaRound-Regular.ttf
+    ${PC_FONT_DIR}/VarelaRound-Regular.ttf
+    EXPECTED_HASH SHA256=e1e47eb66dbc2ddc106661338e712d9176c9e83c669a82fde155324823d03aa2)
+file(DOWNLOAD
+    https://raw.githubusercontent.com/google/fonts/${PC_FONT_COMMIT}/ofl/varelaround/OFL.txt
+    ${PC_FONT_DIR}/VarelaRound-OFL.txt
+    EXPECTED_HASH SHA256=45446732635812510428bf1bad902a8b133f3c7348ad8593ecca90895595b278)
 
 add_executable(ac_pc
     ${PC_SOURCES}

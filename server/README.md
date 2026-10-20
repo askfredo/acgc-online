@@ -48,6 +48,9 @@ Errors are `{"error": "..."}`.
 | `POST` | `/api/v1/towns/{id}/lock` | become the host (200 with `lock_id`), or 409 with who is hosting |
 | `POST` | `/api/v1/towns/{id}/lock/renew` | keep hosting (`X-Lock-Id`); locks expire after 60 s |
 | `DELETE` | `/api/v1/towns/{id}/lock` | stop hosting |
+| `POST` | `/api/v1/towns/{id}/public` | `{"public": true}`: list the town on the world map (owner only) |
+| `GET` | `/api/v1/world` | towns on the world map: name, residents, free houses, whether someone is playing, map spot. Never members or codes |
+| `POST` | `/api/v1/towns/{id}/move-in` | become a resident of a town on the map (no ticket) |
 
 ### How a game uses it
 

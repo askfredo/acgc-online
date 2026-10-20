@@ -1,4 +1,30 @@
-# Animal Crossing PC Port - Deluxe Edition
+# ACGC Online
+
+Online play for the Animal Crossing (GameCube) PC port: share a town with friends and
+siblings, up to four residents, and play in it together at the same time, something the
+original game never had. Towns are saved on a server you can deploy yourself.
+
+Built on [ACGC-Deluxe-PC-Port](https://github.com/imcynic/ACGC-Deluxe-PC-Port). Work in
+progress: see [docs/ONLINE.md](docs/ONLINE.md) for the design and stages, and
+[server/](server/) for the town server.
+
+What works today (two players):
+
+- The guest downloads the host's town and plays their own resident in it; their
+  progress is saved into the shared town.
+- You see each other with your own faces and clothes, tools in hand, walking,
+  running and reacting, and you can't walk through each other.
+- Items on the ground, fruit, digging and burying stay in sync; trees sway and doors
+  open on both screens.
+- Emotes on the D-pad (L + D-pad for more), with the villagers' feeling icons.
+- A resident in a menu stays visible with a "thinking" icon.
+
+Play with `--host` and `--join IP` for now; the start menu and cloud saves are next.
+Like the original port, no game assets are included: you need your own disc image.
+
+---
+
+# Animal Crossing PC Port - Deluxe Edition (original README)
 
 Native PC port of Animal Crossing (GameCube) with Deluxe content, built on [ac-decomp](https://github.com/ACreTeam/ac-decomp) and [ACGC-PC-Port](https://github.com/flyngmt/ACGC-PC-Port).
 

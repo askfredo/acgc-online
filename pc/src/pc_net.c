@@ -348,9 +348,12 @@ void pc_net_init(void) {
 }
 
 void pc_net_shutdown(void) {
-    if (g_pc_net_mode == PC_NET_MODE_OFF) {
+    static int done = 0;
+
+    if (g_pc_net_mode == PC_NET_MODE_OFF || done) {
         return;
     }
+    done = 1;
     pc_net_flush();
     if (s_conn != PC_SOCK_INVALID) {
         pc_sock_close(s_conn);

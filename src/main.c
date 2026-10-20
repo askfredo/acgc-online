@@ -102,6 +102,13 @@ extern void mainproc(void* val) {
     OSReport("[PC] mainproc: graph_proc returned\n");
     {
         extern void pc_platform_shutdown(void);
+        extern void pc_net_shutdown(void);
+        extern void pc_cloud_shutdown(void);
+
+        /* The game exits from here, not through main(): finish the last cloud upload and
+         * give the town back before SDL goes away. */
+        pc_net_shutdown();
+        pc_cloud_shutdown();
         pc_platform_shutdown();
         exit(0);
     }

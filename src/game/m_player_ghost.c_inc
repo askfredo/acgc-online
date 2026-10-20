@@ -42,12 +42,45 @@ static const Player_emote_c l_player_emotes[] = {
 
 #define Player_EMOTE_NUM (int)(sizeof(l_player_emotes) / sizeof(l_player_emotes[0]))
 #define Player_EMOTE_MAX_FRAMES 150
+/* Several feeling effects loop until killed (villagers kill them when their animation
+ * ends), so every emote icon is killed after this long and fades out. */
+#define Player_EMOTE_ICON_FRAMES 120
+/* Effects are killed by (effect, owner name): the local player's own effects use RSV_NO,
+ * the ghost's use a name of their own so one never cuts the other's short. */
+#define Player_GHOST_EFFECT_OWNER 0xFFFD
+
+typedef struct {
+    int effect; /* -1 when none */
+    int timer;
+    u16 owner;
+} Player_emote_icon_c;
 
 static struct {
     int anim; /* body reaction playing, -1 when none */
     int timer;
     int duration;
-} l_player_emote = { -1, 0, 0 };
+    Player_emote_icon_c icons[2]; /* [0] local player, [1] ghost */
+} l_player_emote = { -1, 0, 0, { { -1, 0, RSV_NO }, { -1, 0, Player_GHOST_EFFECT_OWNER } } };
+
+static void Player_emote_icon_kill(Player_emote_icon_c* icon) {
+    if (icon->effect >= 0) {
+        Common_Get(clip).effect_clip->effect_kill_proc(icon->effect, icon->owner);
+        icon->effect = -1;
+    }
+}
+
+/* Replaces any icon still showing, so the same emote can be repeated right away. */
+static void Player_emote_icon_start(Player_emote_icon_c* icon, int effect) {
+    Player_emote_icon_kill(icon);
+    icon->effect = effect;
+    icon->timer = Player_EMOTE_ICON_FRAMES;
+}
+
+static void Player_emote_icon_update(Player_emote_icon_c* icon) {
+    if (icon->effect >= 0 && --icon->timer <= 0) {
+        Player_emote_icon_kill(icon);
+    }
+}
 
 typedef struct {
     cKF_SkeletonInfo_R_c keyframe0;
@@ -154,6 +187,9 @@ static void Player_actor_emote_update(ACTOR* actorx, GAME* game) {
         return;
     }
 
+    Player_emote_icon_update(&l_player_emote.icons[0]);
+    Player_emote_icon_update(&l_player_emote.icons[1]);
+
     /* Body reaction: only while standing; any other action takes over the animation. */
     if (l_player_emote.anim >= 0) {
         if (main_index != mPlayer_INDEX_WAIT || player->animation0_idx != l_player_emote.anim) {
@@ -174,7 +210,8 @@ static void Player_actor_emote_update(ACTOR* actorx, GAME* game) {
         return;
     }
 
-    player->draw_effect_idx = l_player_emotes[emote].effect + 1; /* spawned at the feel joint in draw */
+    Player_emote_icon_start(&l_player_emote.icons[0], l_player_emotes[emote].effect);
+    player->draw_effect_idx = l_player_emotes[emote].effect + 1; /* spawned at the feel joint in draw (RSV_NO) */
     mNtp_send_emote(emote);
 
     if (main_index == mPlayer_INDEX_WAIT && l_player_emotes[emote].anim >= 0) {
@@ -426,8 +463,9 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
         int emote = mNtp_pop_emote();
 
         if (emote >= 0 && emote < Player_EMOTE_NUM && ghost->feel_valid) {
+            Player_emote_icon_start(&l_player_emote.icons[1], l_player_emotes[emote].effect);
             Common_Get(clip).effect_clip->effect_make_proc(l_player_emotes[emote].effect, ghost->feel_pos, 2,
-                                                           remote.angle_y, game, RSV_NO, 0, 0);
+                                                           remote.angle_y, game, Player_GHOST_EFFECT_OWNER, 0, 0);
         }
     }
 }

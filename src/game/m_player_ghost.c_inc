@@ -41,13 +41,27 @@ static void Player_actor_ghost_send_state(ACTOR* actorx) {
     pc_net_update(&state);
 }
 
-static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
+/* Called at the end of the local player's normal draw, so the scene's lights are set up. */
+static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game, u8* eye_tex_p, u8* mouth_tex_p) {
     Player_ghost_c* ghost = &l_player_ghost;
     PcNetPlayerState remote;
     cKF_Animation_R_c* anim;
     s_xyz rot;
+    u8* tex_p;
+    u16* pallet_p;
+    u16* face_pallet_p;
+    GRAPH* graph = game->graph;
 
     if (g_pc_net_mode == PC_NET_MODE_OFF || !pc_net_get_remote(&remote)) {
+        return;
+    }
+
+    /* Item drawing may have rebound segments since the player's skeleton was drawn,
+     * and the texture banks are not loaded on every frame (e.g. while a scene loads). */
+    tex_p = mPlib_get_player_tex_p(game);
+    pallet_p = mPlib_get_player_pallet_p(game);
+    face_pallet_p = mPlib_get_player_face_pallet_p(game);
+    if (eye_tex_p == NULL || mouth_tex_p == NULL || tex_p == NULL || pallet_p == NULL || face_pallet_p == NULL) {
         return;
     }
     if (remote.scene_no != Save_Get(scene_no) || remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM) {
@@ -80,6 +94,14 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     rot.x = 0;
     rot.y = remote.angle_y;
     rot.z = 0;
+
+    OPEN_POLY_OPA_DISP(graph);
+    gSPSegment(POLY_OPA_DISP++, ANIME_1_TXT_SEG, eye_tex_p);
+    gSPSegment(POLY_OPA_DISP++, ANIME_2_TXT_SEG, mouth_tex_p);
+    gSPSegment(POLY_OPA_DISP++, ANIME_3_TXT_SEG, tex_p);
+    gSPSegment(POLY_OPA_DISP++, ANIME_4_TXT_SEG, pallet_p);
+    gSPSegment(POLY_OPA_DISP++, ANIME_5_TXT_SEG, face_pallet_p);
+    CLOSE_POLY_OPA_DISP(graph);
 
     Matrix_push();
     Matrix_softcv3_load(&rot, remote.pos[0], remote.pos[1] + actorx->shape_info.ofs_y * actorx->scale.y,

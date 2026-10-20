@@ -388,6 +388,10 @@ static void Player_actor_draw_Normal(ACTOR* actorx, GAME* game) {
         Matrix_pull();
     }
 
+#ifdef TARGET_PC
+    Player_actor_ghost_draw(actorx, game, eye_tex_p, mouth_tex_p);
+#endif
+
 #if VERSION >= VER_GAFU01_00
     if (player->item_net_catch_correct_pos_set) {
         TOOLS_ACTOR* label = (TOOLS_ACTOR*)player->item_net_catch_label;

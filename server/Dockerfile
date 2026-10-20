@@ -1,8 +1,9 @@
-# Small static image: the server is a single Go binary with no dependencies.
+# The town server. Built from the repository root (see /railway.json):
+#   docker build -f server/Dockerfile .
 FROM golang:1.24-alpine AS build
 WORKDIR /src
-COPY go.mod ./
-COPY *.go ./
+COPY server/go.mod ./
+COPY server/*.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /server .
 
 FROM scratch

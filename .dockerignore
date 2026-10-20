@@ -1,0 +1,4 @@
+# Only the town server is built into an image: leave the game out of the build context.
+*
+!server/go.mod
+!server/*.go

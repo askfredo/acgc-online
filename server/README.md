@@ -10,6 +10,7 @@ standard library only, plain files on disk.
 cd server
 go run .                      # http://localhost:8080, data in ./data
 go test ./...
+docker build -f server/Dockerfile ..   # the image Railway builds (from the repo root)
 ```
 
 Environment:
@@ -21,12 +22,12 @@ Environment:
 
 ## Deploy on Railway
 
-1. New project → **Deploy from GitHub repo** → pick this repository.
-2. Service **Settings → Root Directory**: `/server`. Railway builds the `Dockerfile`
-   (see `railway.json`).
-3. Service **Volumes → New volume**, mount path `/data`. Without a volume every
+1. New project → **Deploy from GitHub repo** → pick this repository. Railway reads
+   `/railway.json` and builds `server/Dockerfile`; nothing to configure.
+2. Service **Volumes → New volume**, mount path `/data`. Without a volume every
    redeploy loses all towns.
-4. **Settings → Networking → Generate Domain**. That URL is what players put in the game.
+3. **Settings → Networking → Generate Domain**. That domain is the town server
+   players use (online.ini `server = your-app.up.railway.app`).
 
 A town save is 456 KB; with 10 backups each, a 0.5 GB volume holds about 100 towns.
 

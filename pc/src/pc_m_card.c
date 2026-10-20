@@ -35,14 +35,12 @@
 
 static const char* pc_save_path(int which) {
     static char paths[3][96];
+    /* Recomputed each time: a new town can switch to cloud mode at its first save. */
+    const char* dir = g_pc_cloud_mode ? pc_cloud_save_dir() : "save";
 
-    if (paths[0][0] == '\0') {
-        const char* dir = g_pc_cloud_mode ? pc_cloud_save_dir() : "save";
-
-        snprintf(paths[0], sizeof(paths[0]), "%s/" PC_GCI_FILENAME, dir);
-        snprintf(paths[1], sizeof(paths[1]), "%s/" PC_GCI_FILENAME ".tmp", dir);
-        snprintf(paths[2], sizeof(paths[2]), "%s", dir);
-    }
+    snprintf(paths[0], sizeof(paths[0]), "%s/" PC_GCI_FILENAME, dir);
+    snprintf(paths[1], sizeof(paths[1]), "%s/" PC_GCI_FILENAME ".tmp", dir);
+    snprintf(paths[2], sizeof(paths[2]), "%s", dir);
     return paths[which];
 }
 #define PC_SAVE_MAX_BACKUPS 3
@@ -263,6 +261,15 @@ static int pc_save_write_gci(void) {
     if (!pc_save_ready) return TRUE;
     /* Netplay guest never touches the save on disk (the host's copy is authoritative). */
     if (g_pc_net_mode == PC_NET_MODE_JOIN) return TRUE;
+
+    /* A town started online from the intro goes to the cloud from its first save. */
+    if (pc_cloud_new_town_pending()) {
+        extern void pc_msg_decode(const u8* in, int len, char* out, int out_size);
+        char name[48];
+
+        pc_msg_decode(Save_Get(land_info).name, sizeof(Save_Get(land_info).name), name, sizeof(name));
+        pc_cloud_on_first_save(name);
+    }
 
 #ifdef _WIN32
     _mkdir(PC_SAVE_DIR);

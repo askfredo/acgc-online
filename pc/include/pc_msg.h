@@ -30,6 +30,12 @@ extern const int pc_msg_control_count;
  * Returns the encoded length, or -1 on an unknown character or code (logged). */
 int pc_msg_encode(const char* text, uint8_t* out, int out_max);
 
+/* Make outside text (e.g. a town name from the server) safe to embed in a message:
+ * characters missing from the game's font become '?', and "<<" can't start a code. */
+void pc_msg_sanitize(const char* in, char* out, int out_size);
+/* Decode text in the game's character set (e.g. the town name in a save) to UTF-8. */
+void pc_msg_decode(const uint8_t* in, int len, char* out, int out_size);
+
 /* Set the text of a PC message or choice string (copied and encoded now). */
 int pc_msg_set(int msg_no, const char* text);
 int pc_msg_set_choice(int str_no, const char* text);

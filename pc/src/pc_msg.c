@@ -23,6 +23,8 @@ static struct {
 static int s_override_count = 0;
 static uint8_t s_loaded[PC_MSG_COUNT]; /* PC messages loaded since last pc_msg_take_loaded */
 
+static int pc_msg_char_at(const char* p, size_t* len);
+
 static int pc_msg_hex(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -84,9 +86,8 @@ int pc_msg_encode(const char* text, uint8_t* out, int out_max) {
     int len = 0;
 
     while (*p != '\0') {
-        int best = -1;
+        int best;
         size_t best_len = 0;
-        int i;
 
         if (p[0] == '<' && p[1] == '<') {
             int used = pc_msg_encode_control(p + 2, out, &len, out_max);
@@ -98,14 +99,7 @@ int pc_msg_encode(const char* text, uint8_t* out, int out_max) {
             continue;
         }
         /* Longest character of the game's set that matches here (first one on ties). */
-        for (i = 0; i < 256; i++) {
-            const char* c = pc_msg_char_map[i];
-            size_t n = strlen(c);
-            if (n > best_len && strncmp(p, c, n) == 0) {
-                best = i;
-                best_len = n;
-            }
-        }
+        best = pc_msg_char_at(p, &best_len);
         if (best < 0 || len >= out_max) {
             fprintf(stderr, "[Msg] character not in the game's font at: %.20s\n", p);
             return -1;
@@ -114,6 +108,69 @@ int pc_msg_encode(const char* text, uint8_t* out, int out_max) {
         p += best_len;
     }
     return len;
+}
+
+static int pc_msg_char_at(const char* p, size_t* len) {
+    int best = -1;
+    size_t best_len = 0;
+    int i;
+
+    for (i = 0; i < 256; i++) {
+        const char* c = pc_msg_char_map[i];
+        size_t n = strlen(c);
+        if (n > best_len && strncmp(p, c, n) == 0) {
+            best = i;
+            best_len = n;
+        }
+    }
+    *len = best_len;
+    return best;
+}
+
+void pc_msg_sanitize(const char* in, char* out, int out_size) {
+    int n = 0;
+
+    while (*in != '\0' && n < out_size - 1) {
+        size_t len;
+        int c = pc_msg_char_at(in, &len);
+
+        if (c < 0 || (in[0] == '<' && in[1] == '<') || *in == '\n') {
+            out[n++] = '?';
+            /* skip one UTF-8 character */
+            in++;
+            while ((*in & 0xC0) == 0x80) {
+                in++;
+            }
+            continue;
+        }
+        if (n + (int)len >= out_size) {
+            break;
+        }
+        memcpy(out + n, in, len);
+        n += (int)len;
+        in += len;
+    }
+    out[n] = '\0';
+}
+
+void pc_msg_decode(const uint8_t* in, int len, char* out, int out_size) {
+    int n = 0;
+    int i;
+
+    for (i = 0; i < len; i++) {
+        const char* c = pc_msg_char_map[in[i]];
+        int cl = (int)strlen(c);
+
+        if (n + cl >= out_size) {
+            break;
+        }
+        memcpy(out + n, c, cl);
+        n += cl;
+    }
+    while (n > 0 && out[n - 1] == ' ') {
+        n--; /* names are padded with spaces */
+    }
+    out[n] = '\0';
 }
 
 static int pc_msg_store(PcMsgEntry* e, const char* text) {

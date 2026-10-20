@@ -39,6 +39,10 @@ void VIWaitForRetrace(void) {
     }
 
     pc_net_poll();
+    {
+        extern void pc_online_intro_tick(void);
+        pc_online_intro_tick();
+    }
 
     Uint64 t_before_swap = SDL_GetPerformanceCounter();
     pc_platform_swap_buffers();

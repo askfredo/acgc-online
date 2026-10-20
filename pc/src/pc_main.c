@@ -262,20 +262,26 @@ int pc_platform_poll_events(void) {
     return 1;
 }
 
-/* Restart the game with one extra option (e.g. "--menu"), replacing this process. */
+/* Restart the game with one option (e.g. "--town", id), replacing this process. Only
+ * --verbose is carried over from the original command line. */
 static char** s_argv;
 
-void pc_relaunch_with(const char* arg) {
-    char* args[64];
+void pc_relaunch_with(const char* arg, const char* value) {
+    char* args[8];
     int n = 0;
     int i;
 
-    for (i = 0; s_argv[i] != NULL && n < 62; i++) {
-        if (strcmp(s_argv[i], arg) != 0) {
+    args[n++] = s_argv[0];
+    for (i = 1; s_argv[i] != NULL; i++) {
+        if (strcmp(s_argv[i], "--verbose") == 0 || strcmp(s_argv[i], "-v") == 0) {
             args[n++] = s_argv[i];
+            break;
         }
     }
     args[n++] = (char*)arg;
+    if (value != NULL) {
+        args[n++] = (char*)value;
+    }
     args[n] = NULL;
     fflush(stdout);
 #ifdef _WIN32

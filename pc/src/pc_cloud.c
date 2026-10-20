@@ -1,4 +1,7 @@
 /* pc_cloud.c - towns saved on the online town server (see pc_cloud.h) */
+#ifdef _WIN32
+#define _CRT_RAND_S /* rand_s, before any CRT header */
+#endif
 #include "pc_cloud.h"
 #include "pc_http.h"
 
@@ -15,6 +18,11 @@
 #endif
 
 #define PC_CLOUD_INI "online.ini"
+/* Server used when online.ini doesn't name one. Builds meant for a community server set it
+ * with -DPC_CLOUD_DEFAULT_SERVER=\"https://...\". */
+#ifndef PC_CLOUD_DEFAULT_SERVER
+#define PC_CLOUD_DEFAULT_SERVER ""
+#endif
 #define PC_CLOUD_RENEW_MS 20000
 #define PC_CLOUD_RETRY_MS 5000
 
@@ -25,6 +33,8 @@ char g_pc_cloud_town[32] = "";
 static char s_server[256] = "";
 static char s_user[64] = "";
 static char s_token[128] = "";
+static char s_pass[64] = ""; /* only for the automatic account */
+static int s_new_town_pending = 0;
 
 enum {
     PC_CLOUD_CMD_NONE,
@@ -83,6 +93,8 @@ static void pc_cloud_load_ini(void) {
             snprintf(s_user, sizeof(s_user), "%s", v);
         } else if (strncmp(line, "token", 5) == 0) {
             snprintf(s_token, sizeof(s_token), "%s", v);
+        } else if (strncmp(line, "password", 8) == 0) {
+            snprintf(s_pass, sizeof(s_pass), "%s", v);
         }
     }
     fclose(f);
@@ -99,6 +111,9 @@ static void pc_cloud_save_ini(void) {
     fprintf(f, "server = %s\n", s_server);
     fprintf(f, "username = %s\n", s_user);
     fprintf(f, "token = %s\n", s_token);
+    if (s_pass[0] != '\0') {
+        fprintf(f, "password = %s\n", s_pass);
+    }
     fclose(f);
 }
 
@@ -584,6 +599,121 @@ static int pc_cloud_lock_call(const char* method, const char* suffix, PcHttpResp
     return pc_cloud_call(method, path, s_lock_id[0] ? extra : NULL, NULL, 0, resp);
 }
 
+/* After taking the lock: local copy of the town and the upload/renew worker. */
+static void pc_cloud_open_session(void) {
+    extern int pc_cloud_worker(void* arg);
+
+    /* Local copy of the cloud town, separate from the offline save. */
+    pc_mkdir("cloud");
+    snprintf(s_save_dir, sizeof(s_save_dir), "cloud/%s", g_pc_cloud_town);
+    pc_mkdir(s_save_dir);
+
+    s_mutex = SDL_CreateMutex();
+    s_cond = SDL_CreateCond();
+    s_worker = SDL_CreateThread(pc_cloud_worker, "cloud", NULL);
+}
+
+/* Cryptographically secure random bytes from the OS (the account password depends on it). */
+static int pc_cloud_random(unsigned char* out, int n) {
+#ifdef _WIN32
+    int i;
+    for (i = 0; i < n; i++) {
+        unsigned int v;
+        if (rand_s(&v) != 0) {
+            return 0;
+        }
+        out[i] = (unsigned char)v;
+    }
+    return 1;
+#else
+    FILE* f = fopen("/dev/urandom", "rb");
+    int ok = f != NULL && fread(out, 1, n, f) == (size_t)n;
+    if (f != NULL) {
+        fclose(f);
+    }
+    return ok;
+#endif
+}
+
+int pc_cloud_ensure_account(char* err, int err_size) {
+    char user[32];
+    char pass[40];
+    unsigned char rnd[21];
+    int i;
+
+    pc_cloud_load_ini();
+    if (s_server[0] == '\0') {
+        if (PC_CLOUD_DEFAULT_SERVER[0] == '\0') {
+            snprintf(err, err_size, "no town server set (online.ini)");
+            return 0;
+        }
+        pc_cloud_set_server(PC_CLOUD_DEFAULT_SERVER);
+    }
+    if (s_token[0] != '\0') {
+        return 1;
+    }
+    if (s_user[0] != '\0' && s_pass[0] != '\0' && pc_cloud_auth(s_user, s_pass, 0, err, err_size)) {
+        return 1; /* automatic account whose session expired */
+    }
+
+    /* New automatic account. The name is only an id; residents keep their in-game names. */
+    if (!pc_cloud_random(rnd, sizeof(rnd))) {
+        snprintf(err, err_size, "no secure random source");
+        return 0;
+    }
+    snprintf(user, sizeof(user), "p_%02x%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3], rnd[4]);
+    for (i = 0; i < 16; i++) {
+        snprintf(pass + i * 2, 3, "%02x", rnd[5 + i]);
+    }
+    if (!pc_cloud_auth(user, pass, 1, err, err_size)) {
+        return 0;
+    }
+    snprintf(s_pass, sizeof(s_pass), "%s", pass);
+    pc_cloud_save_ini();
+    printf("[Cloud] created this PC's account %s\n", s_user);
+    return 1;
+}
+
+void pc_cloud_defer_new_town(void) {
+    s_new_town_pending = 1;
+}
+
+int pc_cloud_new_town_pending(void) {
+    return s_new_town_pending;
+}
+
+/* The intro's first save: create the town on the server and become its host, so this
+ * save (and every later one) goes to the cloud. Returns 1 if the game is now in cloud mode. */
+int pc_cloud_on_first_save(const char* town_name) {
+    PcCloudTown town;
+    PcHttpResponse resp;
+    char err[160];
+
+    if (!s_new_town_pending) {
+        return 0;
+    }
+    s_new_town_pending = 0;
+    if (!pc_cloud_ensure_account(err, sizeof(err)) ||
+        !pc_cloud_create_town(town_name[0] ? town_name : "Town", &town, err, sizeof(err))) {
+        printf("[Cloud] could not create the town online: %s (kept offline)\n", err);
+        return 0;
+    }
+    snprintf(g_pc_cloud_town, sizeof(g_pc_cloud_town), "%s", town.id);
+    pc_cloud_lock_call("POST", "", &resp);
+    if (resp.status != 200 || !pc_cloud_json_str((const char*)resp.body, "lock_id", s_lock_id, sizeof(s_lock_id))) {
+        printf("[Cloud] could not host the new town (%d): kept offline\n", resp.status);
+        pc_http_free(&resp);
+        g_pc_cloud_town[0] = '\0';
+        return 0;
+    }
+    pc_http_free(&resp);
+    s_save_version = 0;
+    g_pc_cloud_mode = 1;
+    pc_cloud_open_session();
+    printf("[Cloud] new town %s created online (code %s)\n", town.name, town.code);
+    return 1;
+}
+
 void pc_cloud_start(void) {
     PcHttpResponse resp;
     char path[160];
@@ -593,10 +723,9 @@ void pc_cloud_start(void) {
     if (!g_pc_cloud_mode) {
         return;
     }
-    pc_cloud_load_ini();
-    if (s_server[0] == '\0' || s_token[0] == '\0') {
-        pc_cloud_fail("Primero configura el servidor y entra a tu cuenta:\n"
-                      "  --server https://tu-servidor.up.railway.app\n  --login usuario contrasena");
+    if (!pc_cloud_ensure_account(err, sizeof(err))) {
+        snprintf(msg, sizeof(msg), "No se pudo conectar al servidor de pueblos: %s", err);
+        pc_cloud_fail(msg);
     }
 
     /* Become the host of the town. */
@@ -633,17 +762,7 @@ void pc_cloud_start(void) {
     }
     pc_http_free(&resp);
 
-    /* Local copy of the cloud town, separate from the offline save. */
-    pc_mkdir("cloud");
-    snprintf(s_save_dir, sizeof(s_save_dir), "cloud/%s", g_pc_cloud_town);
-    pc_mkdir(s_save_dir);
-
-    s_mutex = SDL_CreateMutex();
-    s_cond = SDL_CreateCond();
-    {
-        extern int pc_cloud_worker(void* arg);
-        s_worker = SDL_CreateThread(pc_cloud_worker, "cloud", NULL);
-    }
+    pc_cloud_open_session();
 }
 
 /* Upload the pending save; on success it is cleared. Returns 0 if it must be retried.

@@ -48,6 +48,16 @@ int pc_cloud_join_town(const char* code, PcCloudTown* out, char* err, int err_si
 /* Play this town from the cloud (pc_cloud_start does the rest). */
 void pc_cloud_select_town(const char* id);
 
+/* Players never type an account: one is created on this PC the first time it's needed
+ * (random name and password kept in online.ini), on the configured or default server. */
+int pc_cloud_ensure_account(char* err, int err_size);
+
+/* A brand-new town started from the intro: it is created on the server, named after the
+ * town, the first time the game saves (pc_cloud_on_first_save). */
+void pc_cloud_defer_new_town(void);
+int pc_cloud_new_town_pending(void);
+int pc_cloud_on_first_save(const char* town_name);
+
 /* Playing a cloud town: lock + download (blocks; exits with a message on failure). */
 void pc_cloud_start(void);
 void pc_cloud_shutdown(void);

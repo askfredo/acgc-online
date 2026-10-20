@@ -148,3 +148,12 @@ extern void mMsg_Main(GAME* game) {
 extern void mMsg_Draw(GAME* game) {
     mMsg_Draw_Window(&mMsg_window, game);
 }
+
+#ifdef TARGET_PC
+/* For the PC port's dialogue flows (pc_online_intro.c): no message window is showing. */
+extern int mMsg_PC_IsWindowIdle(void) {
+    mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+
+    return mMsg_Check_main_wait(msg_p) || mMsg_Check_main_hide(msg_p);
+}
+#endif

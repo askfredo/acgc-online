@@ -8,7 +8,7 @@
 #ifdef TARGET_PC
 #include "pc_net.h"
 
-extern void mNtp_player_update(const PcNetPlayerState* local);
+extern void mNtp_player_update(GAME* game, const PcNetPlayerState* local);
 extern int mNtp_get_remote(PcNetPlayerState* out);
 extern void mPlib_PC_Load_FaceTexAndPallet(u8* tex_p, u16* pal_p, int sex, int face);
 
@@ -32,7 +32,7 @@ typedef struct {
 
 static Player_ghost_c l_player_ghost;
 
-static void Player_actor_ghost_send_state(ACTOR* actorx) {
+static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
     PcNetPlayerState state;
 
@@ -55,7 +55,7 @@ static void Player_actor_ghost_send_state(ACTOR* actorx) {
     state.mouth_tex_idx = player->mouth_tex_idx;
     state.cloth_idx = Now_Private->cloth.idx;
     state.player_no = Common_Get(player_no);
-    mNtp_player_update(&state);
+    mNtp_player_update(game, &state);
 }
 
 static void Player_actor_ghost_update_look(Player_ghost_c* ghost, const PcNetPlayerState* remote) {

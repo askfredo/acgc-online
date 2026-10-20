@@ -1679,7 +1679,7 @@ extern void Player_actor_move(ACTOR* actorx, GAME* game) {
     Player_actor_check_fold_paper_airplane();
 #endif
 #ifdef TARGET_PC
-    Player_actor_ghost_send_state(actorx);
+    Player_actor_ghost_send_state(actorx, game);
 #endif
 }
 

@@ -1,0 +1,36 @@
+ACGC Online - Animal Crossing (GameCube) with friends
+=====================================================
+
+ESPAÑOL
+-------
+1. Pon tu propia copia del juego en la carpeta "rom":
+   Animal Crossing (USA), GAFE01, en .iso, .gcm, .ciso o NKit .iso.
+   (El juego no viene incluido: tiene que ser tu disco.)
+2. Abre AnimalCrossing.exe (Windows) o ./AnimalCrossing (Linux).
+3. Juega normal. Para jugar en línea, ve a la estación de tren y habla con Porter:
+   - "Invite friends": pone tu pueblo en línea y te da un boleto (código) para tus amigos.
+   - "Take the train": viaja a tus otros pueblos, o múdate al de un amigo con su boleto.
+   - "World map": pueblos que otros jugadores publicaron.
+   Si alguien está jugando el pueblo al que vas, entras a su partida y juegan juntos.
+4. Gestos: flechas del control (o I/J/K/L), y L + flechas (Q + I/J/K/L) para más.
+
+Tu partida sin conexión está en "save". Los pueblos en línea guardan una copia en "cloud".
+La cuenta en línea se crea sola y se guarda en online.ini (no compartas ese archivo).
+
+ENGLISH
+-------
+1. Put your own copy of the game in the "rom" folder:
+   Animal Crossing (USA), GAFE01, as .iso, .gcm, .ciso or NKit .iso.
+   (The game is not included: it has to be your own disc.)
+2. Run AnimalCrossing.exe (Windows) or ./AnimalCrossing (Linux).
+3. Play as usual. To play online, go to the train station and talk to Porter:
+   - "Invite friends": puts your town online and gives you a ticket (code) for friends.
+   - "Take the train": travel to your other towns, or move into a friend's with their ticket.
+   - "World map": towns other players published.
+   If someone is playing the town you go to, you join their game and play together.
+4. Emotes: D-pad (or I/J/K/L), and L + D-pad (Q + I/J/K/L) for more.
+
+Your offline save is in "save". Online towns keep a copy in "cloud".
+Your online account is created automatically and kept in online.ini (don't share it).
+
+Linux needs 32-bit SDL2 (e.g. sudo apt install libsdl2-2.0-0:i386).

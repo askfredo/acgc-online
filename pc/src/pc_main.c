@@ -292,9 +292,26 @@ void pc_relaunch_with(const char* arg, const char* value) {
     fflush(stdout);
 #ifdef _WIN32
     {
+        /* Windows has no exec: start the game again with a quoted command line, then leave. */
         char exe[MAX_PATH];
+        char cmd[2048];
+        size_t len;
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+
         GetModuleFileNameA(NULL, exe, sizeof(exe));
-        _execv(exe, (const char* const*)args);
+        snprintf(cmd, sizeof(cmd), "\"%s\"", exe);
+        for (i = 1; i < n; i++) {
+            len = strlen(cmd);
+            snprintf(cmd + len, sizeof(cmd) - len, " \"%s\"", args[i]);
+        }
+        memset(&si, 0, sizeof(si));
+        si.cb = sizeof(si);
+        if (CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            exit(0);
+        }
     }
 #else
     execv("/proc/self/exe", args);

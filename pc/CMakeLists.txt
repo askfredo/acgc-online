@@ -406,6 +406,11 @@ file(DOWNLOAD
     https://raw.githubusercontent.com/google/fonts/${PC_FONT_COMMIT}/ofl/varelaround/VarelaRound-Regular.ttf
     ${PC_FONT_DIR}/VarelaRound-Regular.ttf
     EXPECTED_HASH SHA256=e1e47eb66dbc2ddc106661338e712d9176c9e83c669a82fde155324823d03aa2)
+# Root certificates for HTTPS where the OS has no PEM bundle (Windows): Mozilla's, via curl
+file(DOWNLOAD
+    https://curl.se/ca/cacert-2026-09-25.pem
+    ${CMAKE_BINARY_DIR}/bin/cacert.pem
+    EXPECTED_HASH SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505)
 file(DOWNLOAD
     https://raw.githubusercontent.com/google/fonts/${PC_FONT_COMMIT}/ofl/varelaround/OFL.txt
     ${PC_FONT_DIR}/VarelaRound-OFL.txt

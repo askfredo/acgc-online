@@ -1,0 +1,106 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # attach builds to releases on tags
+
+jobs:
+  server:
+    name: Town server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - run: go test ./...
+        working-directory: server
+
+  windows:
+    name: Windows (32-bit)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-cmake
+            mingw-w64-i686-make
+            mingw-w64-i686-SDL2
+            mingw-w64-i686-pkgconf
+            python
+            zip
+      - name: N64 SDK headers
+        run: python tools/fetch_n64_headers.py
+      - name: Configure
+        run: cmake -S pc -B pc/build32 -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build pc/build32 -j4
+      - name: Package
+        run: |
+          D=dist/ACGC-Online
+          mkdir -p $D/rom
+          cp pc/build32/bin/AnimalCrossing.exe pc/build32/bin/SDL2.dll pc/build32/bin/cacert.pem $D/
+          cp -r pc/build32/bin/shaders pc/build32/bin/fonts $D/
+          cp docs/PLAYING.txt $D/README.txt
+          cp LICENSE $D/
+          (cd dist && zip -r ../ACGC-Online-windows.zip ACGC-Online)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ACGC-Online-windows
+          path: ACGC-Online-windows.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ACGC-Online-windows.zip
+
+  linux:
+    name: Linux (32-bit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib cmake libsdl2-dev:i386 libgl-dev:i386
+      - name: N64 SDK headers
+        run: python3 tools/fetch_n64_headers.py
+      - name: Configure
+        run: |
+          PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig \
+          cmake -S pc -B pc/build32 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=$PWD/pc/cmake/Toolchain-linux32-multilib.cmake
+      - name: Build
+        run: cmake --build pc/build32 -j4
+      - name: Package
+        run: |
+          D=dist/ACGC-Online
+          mkdir -p $D/rom
+          cp pc/build32/bin/AnimalCrossing pc/build32/bin/cacert.pem $D/
+          cp -r pc/build32/bin/shaders pc/build32/bin/fonts $D/
+          cp docs/PLAYING.txt $D/README.txt
+          cp LICENSE $D/
+          tar -C dist -czf ACGC-Online-linux.tar.gz ACGC-Online
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ACGC-Online-linux
+          path: ACGC-Online-linux.tar.gz
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ACGC-Online-linux.tar.gz

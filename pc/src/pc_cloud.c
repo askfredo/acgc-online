@@ -955,6 +955,37 @@ void pc_cloud_start(void) {
     }
 }
 
+/* The town lock was lost (e.g. it expired while the network was down). Take it back, but
+ * only if nobody is hosting: another session, even one of ours, keeps the town. */
+static int pc_cloud_reclaim_lock(void) {
+    PcHttpResponse resp;
+    PcCloudTown town;
+    char path[96];
+
+    snprintf(path, sizeof(path), "/api/v1/towns/%s", g_pc_cloud_town);
+    pc_cloud_call("GET", path, NULL, NULL, 0, &resp);
+    if (resp.status != 200) {
+        pc_http_free(&resp);
+        return 0;
+    }
+    pc_cloud_parse_town((const char*)resp.body, &town);
+    pc_http_free(&resp);
+    if (town.host[0] != '\0') {
+        printf("[Cloud] %s is hosting this town now: not taking it back\n", town.host);
+        return 0;
+    }
+
+    s_lock_id[0] = '\0';
+    pc_cloud_lock_call("POST", "", &resp);
+    if (resp.status == 200 && pc_cloud_json_str((const char*)resp.body, "lock_id", s_lock_id, sizeof(s_lock_id))) {
+        pc_http_free(&resp);
+        printf("[Cloud] took the town lock back\n");
+        return 1;
+    }
+    pc_http_free(&resp);
+    return 0;
+}
+
 /* Upload the pending save; on success it is cleared. Returns 0 if it must be retried.
  * Called on the worker thread (and once more at shutdown). */
 static int pc_cloud_upload_pending(void) {
@@ -983,6 +1014,11 @@ static int pc_cloud_upload_pending(void) {
     extra[2] = "Content-Type: application/octet-stream";
     extra[3] = NULL;
     pc_cloud_call("PUT", path, extra, data, size, &resp);
+    if (resp.status == 409 && strstr((const char*)resp.body, "not hosting") != NULL && pc_cloud_reclaim_lock()) {
+        pc_http_free(&resp);
+        snprintf(lock_hdr, sizeof(lock_hdr), "X-Lock-Id: %s", s_lock_id);
+        pc_cloud_call("PUT", path, extra, data, size, &resp);
+    }
 
     if (resp.status == 200) {
         int v;
@@ -1036,7 +1072,10 @@ int pc_cloud_worker(void* arg) {
             PcHttpResponse resp;
 
             pc_cloud_lock_call("POST", "/renew", &resp);
-            if (resp.status != 200) {
+            if (resp.status == 409) {
+                printf("[Cloud] the town lock was lost\n");
+                pc_cloud_reclaim_lock();
+            } else if (resp.status != 200) {
                 printf("[Cloud] could not renew the town lock (%d)\n", resp.status);
             }
             pc_http_free(&resp);

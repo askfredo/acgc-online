@@ -204,9 +204,14 @@ func TestLockExpires(t *testing.T) {
 	if _, ok := l.Acquire("town", "beto"); ok {
 		t.Fatal("beto took a held lock")
 	}
-	if again, ok := l.Acquire("town", "ana"); !ok || again.LockID != lk.LockID {
-		t.Fatal("re-acquire by the host should keep the same lock")
+	again, ok := l.Acquire("town", "ana")
+	if !ok || again.LockID == lk.LockID {
+		t.Fatal("re-acquire by the host should hand out a fresh lock")
 	}
+	if l.Release("town", lk.LockID) || !l.Holds("town", again.LockID) {
+		t.Fatal("an older session must not release the newer one's lock")
+	}
+	lk = again
 
 	now = now.Add(lockTTL / 2)
 	if _, ok := l.Renew("town", lk.LockID); !ok {

@@ -303,6 +303,10 @@ func (a *API) getSave(w http.ResponseWriter, r *http.Request, user string) {
 // putSave requires holding the town's lock and the save version it was based on.
 func (a *API) putSave(w http.ResponseWriter, r *http.Request, user string) {
 	id := r.PathValue("id")
+	// Read the save before any refusal: answering early would cut the upload off and the
+	// game would only see a dropped connection instead of the reason.
+	data, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, gciSize+1))
+
 	if _, err := a.store.Town(user, id); writeTownError(w, err) {
 		return
 	}
@@ -315,9 +319,7 @@ func (a *API) putSave(w http.ResponseWriter, r *http.Request, user string) {
 		writeError(w, http.StatusBadRequest, "missing "+saveVersionHd)
 		return
 	}
-
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, gciSize+1))
-	if err != nil || len(data) != gciSize || !bytes.HasPrefix(data, []byte("GAF")) {
+	if readErr != nil || len(data) != gciSize || !bytes.HasPrefix(data, []byte("GAF")) {
 		writeError(w, http.StatusBadRequest, "not an Animal Crossing town save")
 		return
 	}

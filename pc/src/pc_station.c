@@ -324,7 +324,15 @@ int pc_station_world_done(void) {
     s_world_pick = pick;
     t = &s_world[pick];
     pc_msg_sanitize(t->name, name, sizeof(name));
-    if (t->mine) {
+    if (g_pc_cloud_mode && strcmp(t->id, g_pc_cloud_town) == 0) {
+        snprintf(text, sizeof(text),
+                 "%s?<<PAUSE [08]>> Eek eek!<<PAUSE [08]>> That's\n"
+                 "where we are right now,\n"
+                 "<<STR_PLAYERNAME>>!\n"
+                 "<<MSGEND>>",
+                 name);
+        s_world_pick = -1;
+    } else if (t->mine) {
         /* already a resident: just a trip there */
         snprintf(text, sizeof(text),
                  "%s,<<PAUSE [06]>> eek!<<PAUSE [08]>> You live\n"

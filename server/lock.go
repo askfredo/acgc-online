@@ -39,8 +39,10 @@ func (l *Locks) activeLocked(townID string) *HostLock {
 	return lk
 }
 
-// Acquire returns the town's lock: a new one for the user if the town was free (or
-// already theirs), otherwise the current host's lock without its id.
+// Acquire returns the town's lock: a new one for the user if the town was free or
+// already theirs, otherwise the current host's lock without its id. Taking it again gets a
+// fresh id: the newest session hosts, and an older one (a game that was restarted) can no
+// longer renew, upload or release it.
 func (l *Locks) Acquire(townID, user string) (lk HostLock, acquired bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -53,9 +55,10 @@ func (l *Locks) Acquire(townID, user string) (lk HostLock, acquired bool) {
 	}
 	now := l.now()
 	if cur == nil {
-		cur = &HostLock{TownID: townID, Host: user, LockID: randomHex(16), Since: now}
+		cur = &HostLock{TownID: townID, Host: user, Since: now}
 		l.locks[townID] = cur
 	}
+	cur.LockID = randomHex(16)
 	cur.Expires = now.Add(lockTTL)
 	return *cur, true
 }

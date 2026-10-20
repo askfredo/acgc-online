@@ -286,6 +286,8 @@ set(PC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_assets.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_disc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_net.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_http.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_cloud.c
 )
 
 # Rename game's main() to ac_entry() to avoid conflict with PC main() and game_main(GAME*)
@@ -359,6 +361,21 @@ endif()
 # =============================================================================
 # Build executable
 # =============================================================================
+# =============================================================================
+# mbedTLS (HTTPS to the online town server), fetched and built as static libs
+# =============================================================================
+include(FetchContent)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+FetchContent_Declare(mbedtls
+    URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.6/mbedtls-3.6.6.tar.bz2
+    URL_HASH SHA256=8fb65fae8dcae5840f793c0a334860a411f884cc537ea290ce1c52bb64ca007a
+)
+FetchContent_MakeAvailable(mbedtls)
+
 add_executable(ac_pc
     ${PC_SOURCES}
     ${GAME_C_SOURCES}
@@ -375,11 +392,13 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(ac_pc opengl32 winmm imm32 version setupapi ws2_32)
+    target_link_libraries(ac_pc opengl32 winmm imm32 version setupapi ws2_32 bcrypt)
 else()
     find_package(OpenGL REQUIRED)
     target_link_libraries(ac_pc OpenGL::GL dl pthread m)
 endif()
+
+target_link_libraries(ac_pc mbedtls mbedx509 mbedcrypto)
 
 set_target_properties(ac_pc PROPERTIES
     OUTPUT_NAME "AnimalCrossing"

@@ -218,6 +218,7 @@ func (a *API) getSave(w http.ResponseWriter, r *http.Request, user string) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set(saveVersionHd, strconv.Itoa(version))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Write(data)
 }
 

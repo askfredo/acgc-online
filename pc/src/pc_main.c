@@ -10,6 +10,7 @@
 #include "pc_assets.h"
 #include "pc_disc.h"
 #include "pc_net.h"
+#include "pc_cloud.h"
 
 /* prefer discrete GPU on laptops */
 #ifdef _WIN32
@@ -265,8 +266,12 @@ extern void ac_entry(void);
 extern int boot_main(int argc, const char** argv);
 
 int main(int argc, char* argv[]) {
+    int cloud_command = 0;
+
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+        if (pc_cloud_parse_arg(argc, argv, &i, &cloud_command)) {
+            continue;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: AnimalCrossing [options]\n");
             printf("  --verbose, -v       Enable diagnostic output\n");
             printf("  --no-framelimit     Disable frame limiter\n");
@@ -274,6 +279,13 @@ int main(int argc, char* argv[]) {
             printf("  --time HOUR         Override in-game hour (0-23)\n");
             printf("  --host [PORT]       Host a netplay session (default port %d)\n", PC_NET_DEFAULT_PORT);
             printf("  --join IP[:PORT]    Join a netplay session\n");
+            printf("\nOnline towns (server/):\n");
+            printf("  --server URL        Set the town server (saved in online.ini)\n");
+            printf("  --register USER PASS / --login USER PASS\n");
+            printf("  --towns             List your towns\n");
+            printf("  --create-town NAME  Create a town (prints its id and invite code)\n");
+            printf("  --join-town CODE    Become a resident of a town\n");
+            printf("  --town ID           Play a town from the cloud\n");
             printf("  --help, -h          Show this help message\n");
             return 0;
         } else if (strcmp(argv[i], "--no-framelimit") == 0) {
@@ -308,6 +320,10 @@ int main(int argc, char* argv[]) {
             if (g_pc_time_override < 0 || g_pc_time_override > 23) g_pc_time_override = -1;
             i++;
         }
+    }
+
+    if (cloud_command) {
+        return pc_cloud_run_command();
     }
 
     /* Redirect stdout/stderr to NUL unless verbose — unbuffered terminal writes
@@ -364,12 +380,14 @@ int main(int argc, char* argv[]) {
     pc_platform_init();
     pc_disc_init();
     pc_assets_init();
+    pc_cloud_start();
     pc_net_init();
 
     ac_entry();                         /* sets HotStartEntry = &entry */
     boot_main(argc, (const char**)argv); /* full init → HotStartEntry → game loop */
 
     pc_net_shutdown();
+    pc_cloud_shutdown();
     pc_disc_shutdown();
     pc_platform_shutdown();
     return 0;

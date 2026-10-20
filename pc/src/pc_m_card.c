@@ -13,6 +13,7 @@
 #include "m_bg_item.h"
 #include "pc_save_bswap.h"
 #include "pc_net.h"
+#include "pc_cloud.h"
 #include "game.h"
 
 #include <stdio.h>
@@ -26,9 +27,24 @@
 #endif
 #include <dolphin/os.h>  /* OSReport */
 
-#define PC_GCI_PATH     "save/DobutsunomoriP_MURA.gci"
-#define PC_GCI_TMP_PATH "save/DobutsunomoriP_MURA.gci.tmp"
-#define PC_SAVE_DIR     "save"
+/* The offline save lives in save/; a cloud town keeps its local copy in cloud/<town>/. */
+#define PC_GCI_FILENAME "DobutsunomoriP_MURA.gci"
+#define PC_GCI_PATH     pc_save_path(0)
+#define PC_GCI_TMP_PATH pc_save_path(1)
+#define PC_SAVE_DIR     pc_save_path(2)
+
+static const char* pc_save_path(int which) {
+    static char paths[3][96];
+
+    if (paths[0][0] == '\0') {
+        const char* dir = g_pc_cloud_mode ? pc_cloud_save_dir() : "save";
+
+        snprintf(paths[0], sizeof(paths[0]), "%s/" PC_GCI_FILENAME, dir);
+        snprintf(paths[1], sizeof(paths[1]), "%s/" PC_GCI_FILENAME ".tmp", dir);
+        snprintf(paths[2], sizeof(paths[2]), "%s", dir);
+    }
+    return paths[which];
+}
 #define PC_SAVE_MAX_BACKUPS 3
 
 #define GCI_HEADER_SIZE      sizeof(CARDDir)        /* 64 bytes */
@@ -237,6 +253,8 @@ static u8* pc_save_build_gci(CARDDir* dir_hdr_out) {
     return file_data;
 }
 
+int pc_save_serialize(u8** out, u32* out_size);
+
 static int pc_save_write_gci(void) {
     FILE* fp;
     u8* file_data;
@@ -295,6 +313,16 @@ static int pc_save_write_gci(void) {
     }
 
     OSReport("[PC] GCI save: written successfully (backups rotated)\n");
+
+    if (g_pc_cloud_mode) {
+        u8* buf;
+        u32 size;
+
+        if (pc_save_serialize(&buf, &size)) {
+            pc_cloud_queue_upload(buf, size);
+            free(buf);
+        }
+    }
     return TRUE;
 }
 
@@ -468,6 +496,24 @@ static int pc_save_scan_gci_dir(void) {
 
 int pc_save_check_and_load(void) {
     struct stat st;
+
+    /* Cloud town: the downloaded save (none for a new town; never the offline save). */
+    if (g_pc_cloud_mode) {
+        uint32_t size;
+        const u8* buf = pc_cloud_get_boot_save(&size);
+
+        if (buf == NULL) {
+            OSReport("[PC] Cloud town has no save yet: new town\n");
+            return FALSE;
+        }
+        if (pc_save_load_buffer(buf, size)) {
+            OSReport("[PC] Loaded cloud town\n");
+            pc_cloud_free_boot_save();
+            return TRUE;
+        }
+        OSReport("[PC] Cloud save is not valid\n");
+        return FALSE;
+    }
 
     /* Netplay guest: the town comes from the host, never from local disk. */
     if (g_pc_net_mode == PC_NET_MODE_JOIN) {

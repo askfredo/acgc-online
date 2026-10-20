@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -32,11 +34,12 @@ var usernameRe = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
 type API struct {
 	store *Store
 	locks *Locks
+	relay *Live
 	authL *rateLimiter
 }
 
 func NewAPI(store *Store) *API {
-	return &API{store: store, locks: newLocks(), authL: newRateLimiter(10, time.Minute)}
+	return &API{store: store, locks: newLocks(), relay: newLive(), authL: newRateLimiter(10, time.Minute)}
 }
 
 func (a *API) Handler() http.Handler {
@@ -59,6 +62,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/world", a.auth(a.world))
 	mux.HandleFunc("POST /api/v1/towns/{id}/public", a.auth(a.setPublic))
 	mux.HandleFunc("POST /api/v1/towns/{id}/move-in", a.auth(a.moveIn))
+	mux.HandleFunc("GET /api/v1/towns/{id}/live", a.auth(a.live))
 	return logRequests(mux)
 }
 
@@ -222,6 +226,7 @@ type worldTown struct {
 	Residents int     `json:"residents"`
 	FreeSlots int     `json:"free_slots"`
 	Playing   bool    `json:"playing"` // someone is in it right now
+	Players   int     `json:"players"` // how many are playing it live (host and guest)
 	Mine      bool    `json:"mine"`    // you live there
 	X         float64 `json:"x"`       // stable spot on the map, 0..1
 	Y         float64 `json:"y"`
@@ -245,7 +250,7 @@ func (a *API) world(w http.ResponseWriter, r *http.Request, user string) {
 		x, y := mapSpot(t.ID)
 		out = append(out, worldTown{
 			ID: t.ID, Name: t.Name, Residents: len(t.Members), FreeSlots: maxResidents - len(t.Members),
-			Playing: a.locks.Host(t.ID) != nil, Mine: t.isMember(user), X: x, Y: y,
+			Playing: a.locks.Host(t.ID) != nil, Players: a.relay.Players(t.ID), Mine: t.isMember(user), X: x, Y: y,
 		})
 	}
 	writeJSONResponse(w, http.StatusOK, out)
@@ -414,6 +419,16 @@ type statusRecorder struct {
 func (s *statusRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack lets the live relay take over the connection through the request logger.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijacking not supported")
+	}
+	s.status = http.StatusSwitchingProtocols
+	return hj.Hijack()
 }
 
 func logRequests(h http.Handler) http.Handler {

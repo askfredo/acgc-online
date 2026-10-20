@@ -69,14 +69,14 @@ jobs:
 
   linux:
     name: Linux (32-bit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib cmake libsdl2-dev:i386 libgl-dev:i386
+          sudo apt-get install -y gcc-multilib g++-multilib cmake libsdl2-dev:i386
       - name: N64 SDK headers
         run: python3 tools/fetch_n64_headers.py
       - name: Configure

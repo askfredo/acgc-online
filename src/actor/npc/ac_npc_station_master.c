@@ -122,5 +122,6 @@ static void aSTM_actor_draw(ACTOR* actorx, GAME* game) {
 }
 
 #include "../src/actor/npc/ac_npc_station_master_move.c_inc"
+#include "../src/actor/npc/ac_npc_station_master_online.c_inc"
 #include "../src/actor/npc/ac_npc_station_master_talk.c_inc"
 #include "../src/actor/npc/ac_npc_station_master_schedule.c_inc"

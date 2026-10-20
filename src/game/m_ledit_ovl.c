@@ -15,6 +15,9 @@ static u8 mLE_reset_title[7] = "Say it!";
 static u8 mLE_request_title[15] = "Request a song!";
 static u8 mLE_myoriginal_title[13] = "Enter a name.";
 static u8 mLE_island_title[20] = "Enter a destination.";
+#ifdef TARGET_PC
+static u8 mLE_ticket_title[17] = "Show your ticket!";
+#endif
 
 typedef struct ledit_win_data_s {
     f32 edit_ofs[2];
@@ -102,6 +105,16 @@ static mLE_win_data_c mLE_win_data[] = {
         mISL_ISLAND_NAME_LEN, 80, { 175, 70, 40, 255 },
         shi_win_mode, shi_win_model,
     },
+#ifdef TARGET_PC
+    {
+        /* Resetti's password window, retitled */
+        { 79.0f, 79.0f }, 1.0f,
+        { 154.0f, 43.0f }, 1.0f,
+        mLE_ticket_title, sizeof(mLE_ticket_title),
+        16, 160, { 40, 140, 60, 255 },
+        rst_win_mode, rst_win_model,
+    },
+#endif
 };
 // clang-format on
 

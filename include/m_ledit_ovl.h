@@ -16,6 +16,9 @@ enum {
     mLE_TYPE_REQUEST,
     mLE_TYPE_MYORIGINAL_NAME,
     mLE_TYPE_ISLAND_NAME,
+#ifdef TARGET_PC
+    mLE_TYPE_TICKET, /* PC: a friend's town ticket code at the station */
+#endif
 
     mLE_TYPE_NUM
 };

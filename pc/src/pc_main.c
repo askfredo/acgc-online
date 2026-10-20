@@ -283,6 +283,10 @@ void pc_relaunch_with(const char* arg, const char* value) {
         args[n++] = (char*)value;
     }
     args[n] = NULL;
+
+    /* Finish the cloud upload of the save just made and give the town back first. */
+    pc_net_shutdown();
+    pc_cloud_shutdown();
     fflush(stdout);
 #ifdef _WIN32
     {
@@ -423,8 +427,12 @@ int main(int argc, char* argv[]) {
     pc_keybindings_load();
     pc_platform_init();
 
-    /* Online town picker (K.K. sends players here with --menu) unless the command line
-     * already said what to play. */
+    /* With no option saying what to play, open this PC's home town if it lives online. */
+    if (!show_menu && !g_pc_cloud_mode && g_pc_net_mode != PC_NET_MODE_JOIN && !g_pc_model_viewer) {
+        pc_cloud_use_home_town();
+    }
+
+    /* Online town picker (--menu) unless the command line already said what to play. */
     if (show_menu && !g_pc_cloud_mode && g_pc_net_mode == PC_NET_MODE_OFF && !g_pc_model_viewer) {
         if (pc_menu_run() == PC_MENU_QUIT) {
             pc_platform_shutdown();

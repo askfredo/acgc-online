@@ -1,0 +1,104 @@
+/* ac_npc_station_master_online.c_inc - PC: Porter's online travel talk (pc/src/pc_station.c).
+ *
+ * Replaces "Are you planning on going on a trip?" (and the memory card trip behind it)
+ * with: take the train to your towns or to a friend's town with their ticket, or invite
+ * friends here. The ticket is typed on the game's keyboard, the same way Resetti asks
+ * for his password (ac_npc_majin3_talk.c_inc). */
+
+#ifdef TARGET_PC
+#include "pc_station.h"
+#include "m_ledit_ovl.h"
+
+enum {
+    aSTM_PC_MENU,             /* following the choices */
+    aSTM_PC_TICKET_ORDER,     /* "Let me see it!" is showing */
+    aSTM_PC_TICKET_OPEN_WAIT, /* message window closing */
+    aSTM_PC_TICKET_EDIT,      /* keyboard open */
+    aSTM_PC_TICKET_SHOW_WAIT, /* message window coming back */
+};
+
+static int aSTM_pc_state;
+static int aSTM_pc_active = FALSE;
+static u8 aSTM_pc_ticket[16];
+
+static void aSTM_pc_online_talk(NPC_STATION_MASTER_ACTOR* master, GAME_PLAY* play) {
+    mMsg_Window_c* msg_p = mMsg_Get_base_window_p();
+    Submenu* submenu = &play->submenu;
+    int i;
+
+    switch (aSTM_pc_state) {
+        case aSTM_PC_MENU:
+            if (pc_msg_take_loaded(PC_STATION_INVITE_MSG)) {
+                char name[48];
+
+                pc_msg_decode(Save_Get(land_info).name, LAND_NAME_SIZE, name, sizeof(name));
+                pc_station_invite(name);
+            }
+            for (i = 0; i < pc_station_town_count(); i++) {
+                if (pc_msg_take_loaded(PC_STATION_TOWN_MSG(i))) {
+                    pc_station_board(i);
+                }
+            }
+            if (pc_msg_take_loaded(PC_STATION_TICKET_MSG)) {
+                aSTM_pc_state = aSTM_PC_TICKET_ORDER;
+            }
+            break;
+
+        case aSTM_PC_TICKET_ORDER:
+            if (mDemo_Get_OrderValue(mDemo_ORDER_NPC0, 9) != 0) {
+                mMsg_REQUEST_MAIN_DISAPPEAR_WAIT_TYPE1();
+                aSTM_pc_state = aSTM_PC_TICKET_OPEN_WAIT;
+            }
+            break;
+
+        case aSTM_PC_TICKET_OPEN_WAIT:
+            if (mMsg_CHECK_MAIN_WAIT() == TRUE) {
+                mem_clear(aSTM_pc_ticket, sizeof(aSTM_pc_ticket), CHAR_SPACE);
+                submenu->start_refuse = FALSE;
+                mSM_open_submenu_new(submenu, mSM_OVL_LEDIT, mLE_TYPE_TICKET, 0, aSTM_pc_ticket);
+                mDemo_Set_OrderValue(mDemo_ORDER_NPC0, 9, 0);
+                aSTM_pc_state = aSTM_PC_TICKET_EDIT;
+            }
+            break;
+
+        case aSTM_PC_TICKET_EDIT:
+            if (!submenu->open_flag) {
+                submenu->start_refuse = TRUE;
+                mMsg_request_main_appear_wait_type1(msg_p);
+                aSTM_pc_state = aSTM_PC_TICKET_SHOW_WAIT;
+            }
+            break;
+
+        case aSTM_PC_TICKET_SHOW_WAIT:
+            if (mMsg_Check_not_series_main_wait(msg_p) == TRUE) {
+                char code[48];
+
+                pc_msg_decode(aSTM_pc_ticket, sizeof(aSTM_pc_ticket), code, sizeof(code));
+                mMsg_ChangeMsgData(msg_p, pc_station_ticket(code));
+                aSTM_pc_state = aSTM_PC_MENU;
+            }
+            break;
+    }
+}
+
+/* "Going on a trip?" with save data: Porter's online talk if the town server answers. */
+static int aSTM_pc_online_talk_start(NPC_STATION_MASTER_ACTOR* master) {
+    int msg_no = pc_station_open();
+
+    if (msg_no == 0) {
+        return FALSE;
+    }
+    mDemo_Set_msg_num(msg_no);
+    master->talk_proc = &aSTM_pc_online_talk;
+    aSTM_pc_state = aSTM_PC_MENU;
+    aSTM_pc_active = TRUE;
+    return TRUE;
+}
+
+static void aSTM_pc_online_talk_end(void) {
+    if (aSTM_pc_active) {
+        aSTM_pc_active = FALSE;
+        pc_station_talk_done();
+    }
+}
+#endif

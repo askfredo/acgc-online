@@ -58,6 +58,15 @@ void pc_cloud_defer_new_town(void);
 int pc_cloud_new_town_pending(void);
 int pc_cloud_on_first_save(const char* town_name);
 
+/* Porter's "Invite friends": put the town being played online (created on the server and
+ * hosted from now on; it becomes this PC's home town) and get its invite code. Already
+ * online: just the code. Returns 0 with err on failure. */
+int pc_cloud_go_online(const char* town_name, char* code, int code_size, char* err, int err_size);
+/* The town this PC opens at start when no option says otherwise ("" = the offline save). */
+const char* pc_cloud_home_town(void);
+/* After loading settings: play the home town from the cloud unless told otherwise. */
+void pc_cloud_use_home_town(void);
+
 /* Playing a cloud town: lock + download (blocks; exits with a message on failure). */
 void pc_cloud_start(void);
 void pc_cloud_shutdown(void);

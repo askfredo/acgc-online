@@ -34,6 +34,7 @@ static char s_server[256] = "";
 static char s_user[64] = "";
 static char s_token[128] = "";
 static char s_pass[64] = ""; /* only for the automatic account */
+static char s_home[32] = "";  /* home town id ("" = offline save) */
 static int s_new_town_pending = 0;
 
 enum {
@@ -95,6 +96,8 @@ static void pc_cloud_load_ini(void) {
             snprintf(s_token, sizeof(s_token), "%s", v);
         } else if (strncmp(line, "password", 8) == 0) {
             snprintf(s_pass, sizeof(s_pass), "%s", v);
+        } else if (strncmp(line, "home_town", 9) == 0) {
+            snprintf(s_home, sizeof(s_home), "%s", v);
         }
     }
     fclose(f);
@@ -113,6 +116,9 @@ static void pc_cloud_save_ini(void) {
     fprintf(f, "token = %s\n", s_token);
     if (s_pass[0] != '\0') {
         fprintf(f, "password = %s\n", s_pass);
+    }
+    if (s_home[0] != '\0') {
+        fprintf(f, "home_town = %s\n", s_home);
     }
     fclose(f);
 }
@@ -712,6 +718,61 @@ int pc_cloud_on_first_save(const char* town_name) {
     pc_cloud_open_session();
     printf("[Cloud] new town %s created online (code %s)\n", town.name, town.code);
     return 1;
+}
+
+int pc_cloud_go_online(const char* town_name, char* code, int code_size, char* err, int err_size) {
+    PcCloudTown town;
+    PcHttpResponse resp;
+    char path[96];
+
+    if (g_pc_cloud_mode) {
+        /* Already online: look its code up. */
+        snprintf(path, sizeof(path), "/api/v1/towns/%s", g_pc_cloud_town);
+        pc_cloud_call("GET", path, NULL, NULL, 0, &resp);
+        if (resp.status != 200) {
+            pc_cloud_error_text(&resp, err, err_size);
+            pc_http_free(&resp);
+            return 0;
+        }
+        pc_cloud_parse_town((const char*)resp.body, &town);
+        pc_http_free(&resp);
+        snprintf(code, code_size, "%s", town.code);
+        return 1;
+    }
+
+    if (!pc_cloud_ensure_account(err, err_size) ||
+        !pc_cloud_create_town(town_name[0] ? town_name : "Town", &town, err, err_size)) {
+        return 0;
+    }
+    snprintf(g_pc_cloud_town, sizeof(g_pc_cloud_town), "%s", town.id);
+    pc_cloud_lock_call("POST", "", &resp);
+    if (resp.status != 200 || !pc_cloud_json_str((const char*)resp.body, "lock_id", s_lock_id, sizeof(s_lock_id))) {
+        pc_cloud_error_text(&resp, err, err_size);
+        pc_http_free(&resp);
+        g_pc_cloud_town[0] = '\0';
+        return 0;
+    }
+    pc_http_free(&resp);
+    s_save_version = 0;
+    g_pc_cloud_mode = 1;
+    pc_cloud_open_session();
+    /* This town now lives online: open it at start from here on. */
+    snprintf(s_home, sizeof(s_home), "%s", town.id);
+    pc_cloud_save_ini();
+    snprintf(code, code_size, "%s", town.code);
+    printf("[Cloud] %s is online now (code %s)\n", town.name, town.code);
+    return 1;
+}
+
+const char* pc_cloud_home_town(void) {
+    return s_home;
+}
+
+void pc_cloud_use_home_town(void) {
+    pc_cloud_load_ini();
+    if (!g_pc_cloud_mode && s_home[0] != '\0') {
+        pc_cloud_select_town(s_home);
+    }
 }
 
 void pc_cloud_start(void) {

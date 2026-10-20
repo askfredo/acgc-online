@@ -9,8 +9,8 @@
 
 #include <stdint.h>
 
-#define PC_MSG_BASE 0x7000 /* message numbers 0x7000-0x70FF */
-#define PC_MSG_COUNT 0x100
+#define PC_MSG_BASE 0x7000 /* message numbers 0x7000-0x71FF */
+#define PC_MSG_COUNT 0x200
 #define PC_CHOICE_STR_BASE 0x700 /* choice string numbers 0x700-0x77F */
 #define PC_CHOICE_STR_COUNT 0x80
 

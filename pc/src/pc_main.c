@@ -297,8 +297,6 @@ void pc_relaunch_with(const char* arg, const char* value) {
     exit(1);
 }
 
-extern void pc_online_intro_init(void);
-
 /* game's main() renamed to ac_entry via -Dmain=ac_entry, boot.c's to boot_main */
 extern void ac_entry(void);
 extern int boot_main(int argc, const char** argv);
@@ -424,7 +422,6 @@ int main(int argc, char* argv[]) {
     pc_settings_load();
     pc_keybindings_load();
     pc_platform_init();
-    pc_online_intro_init();
 
     /* Online town picker (K.K. sends players here with --menu) unless the command line
      * already said what to play. */

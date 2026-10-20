@@ -291,7 +291,6 @@ set(PC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_menu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_msg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_msg_tables.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/pc_online_intro.c
 )
 
 # Rename game's main() to ac_entry() to avoid conflict with PC main() and game_main(GAME*)

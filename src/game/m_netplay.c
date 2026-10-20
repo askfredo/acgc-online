@@ -22,6 +22,7 @@
 #include "m_actor.h"
 #include "m_player_lib.h"
 #include "ac_structure.h"
+#include "m_submenu.h"
 #include "pc_net.h"
 
 #include <stdio.h>
@@ -34,6 +35,7 @@
 #define mNtp_TREE_QUEUE 8
 #define mNtp_DOOR_TIMEOUT_FRAMES 10
 #define mNtp_DOOR_EXIT_RADIUS 200.0f
+#define mNtp_PAUSE_HEARTBEAT_FRAMES 10
 
 extern int pc_save_serialize(u8** out, u32* out_size);
 extern unsigned int pc_image_base;
@@ -123,6 +125,8 @@ static struct {
     mNtp_tree_shake_c tree_queue[mNtp_TREE_QUEUE];
     int tree_count;
     int remote_emote; /* -1 when none pending */
+    PcNetPlayerState last_local; /* re-sent as a heartbeat while our game is frozen in a menu */
+    int have_last_local;
 
     mNtp_door_c remote_door; /* latest door frame from the peer */
     u32 remote_door_frame;
@@ -219,6 +223,7 @@ static void mNtp_set_deposit(int row, u16 bits) {
 /* --- connection events (called from pc_net) --- */
 
 void mNtp_on_connect(void) {
+    l_ntp.have_last_local = FALSE;
     l_ntp.remote_emote = -1;
     l_ntp.save_requested = FALSE;
     l_ntp.synced = FALSE;
@@ -356,12 +361,30 @@ int mNtp_guest_send_player(void) {
     return TRUE;
 }
 
+/* While a menu is open the play scene stops updating actors, so the player sends
+ * nothing; keep the other side's ghost alive, flagged as paused. */
+static void mNtp_send_pause_heartbeat(void) {
+    GAME_PLAY* play = (GAME_PLAY*)gamePT;
+    PcNetPlayerState state;
+
+    if (!l_ntp.synced || !l_ntp.have_last_local || gamePT == NULL || gamePT->exec != &play_main) {
+        return;
+    }
+    if (play->submenu.process_status == mSM_PROCESS_WAIT || (pc_frame_counter % mNtp_PAUSE_HEARTBEAT_FRAMES) != 0) {
+        return;
+    }
+    state = l_ntp.last_local;
+    state.flags |= PC_NET_STATE_FLAG_PAUSED;
+    pc_net_send(PC_NET_MSG_STATE, &state, sizeof(state));
+}
+
 /* Called by pc_net every frame, including before the game has loaded a save. */
 void mNtp_tick(void) {
     if (l_ntp.save_requested && pc_save_loaded) {
         l_ntp.save_requested = FALSE;
         mNtp_host_send_save();
     }
+    mNtp_send_pause_heartbeat();
 }
 
 /* --- messages --- */
@@ -731,6 +754,8 @@ void mNtp_player_update(GAME* game, const PcNetPlayerState* local) {
     }
 
     pc_net_send(PC_NET_MSG_STATE, local, sizeof(*local));
+    l_ntp.last_local = *local;
+    l_ntp.have_last_local = TRUE;
 
     if (g_pc_net_mode == PC_NET_MODE_JOIN && !l_ntp.sync_requested) {
         /* First frame in the world: take the host's items as the baseline. */

@@ -35,7 +35,7 @@ enum {
     PC_NET_MSG_EMOTE,       /* both: the player made a gesture (emote index) */
 };
 
-#define PC_NET_PROTOCOL_VERSION 5
+#define PC_NET_PROTOCOL_VERSION 6
 
 typedef struct {
     int32_t scene_no;
@@ -56,7 +56,7 @@ typedef struct {
     float anim1_frame;
     /* held tool: skeleton/animation are static data, sent as offsets in the executable */
     int8_t item_main;
-    int8_t pad2;
+    uint8_t flags; /* PC_NET_STATE_FLAG_* */
     int16_t item_shape;
     uint32_t item_skel_ofs;
     uint32_t item_anim_ofs;
@@ -67,6 +67,8 @@ typedef struct {
 } PcNetPlayerState;
 
 #define PC_NET_NO_OFS 0xFFFFFFFFu
+
+#define PC_NET_STATE_FLAG_PAUSED 0x01 /* in a menu (inventory, map...): the game is frozen */
 
 extern int g_pc_net_mode;
 extern char g_pc_net_addr[64];

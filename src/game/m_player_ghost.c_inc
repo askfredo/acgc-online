@@ -60,7 +60,22 @@ static struct {
     int timer;
     int duration;
     Player_emote_icon_c icons[2]; /* [0] local player, [1] ghost */
-} l_player_emote = { -1, 0, 0, { { -1, 0, RSV_NO }, { -1, 0, Player_GHOST_EFFECT_OWNER } } };
+    int ghost_paused_icon;        /* "thinking" icon shown while the other resident is in a menu */
+} l_player_emote = { -1, 0, 0, { { -1, 0, RSV_NO }, { -1, 0, Player_GHOST_EFFECT_OWNER } }, FALSE };
+
+#define Player_GHOST_PAUSED_EFFECT eEC_EFFECT_KANGAERU
+
+static void Player_actor_ghost_paused_icon(GAME* game, int paused, const xyz_t* pos, s16 angle) {
+    if (paused && !l_player_emote.ghost_paused_icon) {
+        /* A looping effect: it stays until the menu closes. */
+        Common_Get(clip).effect_clip->effect_make_proc(Player_GHOST_PAUSED_EFFECT, *pos, 2, angle, game,
+                                                       Player_GHOST_EFFECT_OWNER, 0, 0);
+        l_player_emote.ghost_paused_icon = TRUE;
+    } else if (!paused && l_player_emote.ghost_paused_icon) {
+        Common_Get(clip).effect_clip->effect_kill_proc(Player_GHOST_PAUSED_EFFECT, Player_GHOST_EFFECT_OWNER);
+        l_player_emote.ghost_paused_icon = FALSE;
+    }
+}
 
 static void Player_emote_icon_kill(Player_emote_icon_c* icon) {
     if (icon->effect >= 0) {
@@ -462,14 +477,10 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     u8* mouth_tex_p;
     GRAPH* graph = game->graph;
 
-    if (g_pc_net_mode == PC_NET_MODE_OFF || !mNtp_get_remote(&remote)) {
-        return;
-    }
-    if (remote.scene_no != Save_Get(scene_no) || remote.field_id != mFI_GetFieldId()) {
-        return;
-    }
-    if (remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM || remote.eye_tex_idx >= mPlayer_EYE_TEX_NUM ||
-        remote.mouth_tex_idx >= mPlayer_MOUTH_TEX_NUM) {
+    if (g_pc_net_mode == PC_NET_MODE_OFF || !mNtp_get_remote(&remote) || remote.scene_no != Save_Get(scene_no) ||
+        remote.field_id != mFI_GetFieldId() || remote.anim_idx < 0 || remote.anim_idx >= mPlayer_ANIM_NUM ||
+        remote.eye_tex_idx >= mPlayer_EYE_TEX_NUM || remote.mouth_tex_idx >= mPlayer_MOUTH_TEX_NUM) {
+        Player_actor_ghost_paused_icon(game, FALSE, NULL, 0);
         return;
     }
 
@@ -502,6 +513,10 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     Matrix_pull();
 
     Player_actor_ghost_draw_item(ghost, &remote, game);
+    if (ghost->feel_valid) {
+        Player_actor_ghost_paused_icon(game, (remote.flags & PC_NET_STATE_FLAG_PAUSED) != 0, &ghost->feel_pos,
+                                       remote.angle_y);
+    }
 
     {
         int emote = mNtp_pop_emote();

@@ -262,13 +262,46 @@ int pc_platform_poll_events(void) {
     return 1;
 }
 
+/* Restart the game with one extra option (e.g. "--menu"), replacing this process. */
+static char** s_argv;
+
+void pc_relaunch_with(const char* arg) {
+    char* args[64];
+    int n = 0;
+    int i;
+
+    for (i = 0; s_argv[i] != NULL && n < 62; i++) {
+        if (strcmp(s_argv[i], arg) != 0) {
+            args[n++] = s_argv[i];
+        }
+    }
+    args[n++] = (char*)arg;
+    args[n] = NULL;
+    fflush(stdout);
+#ifdef _WIN32
+    {
+        char exe[MAX_PATH];
+        GetModuleFileNameA(NULL, exe, sizeof(exe));
+        _execv(exe, (const char* const*)args);
+    }
+#else
+    execv("/proc/self/exe", args);
+#endif
+    fprintf(stderr, "[PC] relaunch failed\n");
+    exit(1);
+}
+
+extern void pc_online_intro_init(void);
+
 /* game's main() renamed to ac_entry via -Dmain=ac_entry, boot.c's to boot_main */
 extern void ac_entry(void);
 extern int boot_main(int argc, const char** argv);
 
 int main(int argc, char* argv[]) {
     int cloud_command = 0;
-    int show_menu = 1;
+
+    s_argv = argv;
+    int show_menu = 0;
 
     for (int i = 1; i < argc; i++) {
         if (pc_cloud_parse_arg(argc, argv, &i, &cloud_command)) {
@@ -288,9 +321,11 @@ int main(int argc, char* argv[]) {
             printf("  --create-town NAME  Create a town (prints its id and invite code)\n");
             printf("  --join-town CODE    Become a resident of a town\n");
             printf("  --town ID           Play a town from the cloud\n");
-            printf("  --no-menu           Skip the start menu (play offline)\n");
+            printf("  --menu              Open the online town picker before the game\n");
             printf("  --help, -h          Show this help message\n");
             return 0;
+        } else if (strcmp(argv[i], "--menu") == 0) {
+            show_menu = 1;
         } else if (strcmp(argv[i], "--no-menu") == 0) {
             show_menu = 0;
         } else if (strcmp(argv[i], "--no-framelimit") == 0) {
@@ -383,8 +418,10 @@ int main(int argc, char* argv[]) {
     pc_settings_load();
     pc_keybindings_load();
     pc_platform_init();
+    pc_online_intro_init();
 
-    /* Start menu unless the command line already said what to play. */
+    /* Online town picker (K.K. sends players here with --menu) unless the command line
+     * already said what to play. */
     if (show_menu && !g_pc_cloud_mode && g_pc_net_mode == PC_NET_MODE_OFF && !g_pc_model_viewer) {
         if (pc_menu_run() == PC_MENU_QUIT) {
             pc_platform_shutdown();

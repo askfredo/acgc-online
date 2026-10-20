@@ -519,6 +519,22 @@ static void mChoice_Change_ControlCode(u8* data, int max_size, ACTOR* actor) {
 }
 
 extern void mChoice_Load_ChoseStringFromRom(mChoice_c* choice, u8* str, int str_no, ACTOR* actor) {
+#ifdef TARGET_PC
+    /* The PC port's own choice strings (pc_msg). */
+    {
+        const u8* pc_data;
+        uint32_t pc_size;
+
+        if (pc_msg_get_choice(str_no, &pc_data, &pc_size)) {
+            int n = pc_size < mChoice_CHOICE_STRING_LEN ? (int)pc_size : mChoice_CHOICE_STRING_LEN;
+
+            mem_clear(str, mChoice_CHOICE_STRING_LEN, CHAR_SPACE);
+            memcpy(str, pc_data, n);
+            mChoice_Change_ControlCode(str, mChoice_CHOICE_STRING_LEN, actor);
+            return;
+        }
+    }
+#endif
     if (str_no >= 0 && str_no < mChoice_SELECT_STR_NUM) {
         u32 addr;
         u32 size;

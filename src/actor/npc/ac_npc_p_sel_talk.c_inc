@@ -198,6 +198,12 @@ static int aNPS_talk_end_chk(ACTOR* actorx, GAME* game) {
 
     (*p_sel->talk_proc)(p_sel, play);
     if (mMsg_Check_idling_now(msg_p) == TRUE) {
+#ifdef TARGET_PC
+        {
+            extern void pc_online_intro_kk_done(void);
+            pc_online_intro_kk_done(); /* "Online!" relaunches into the town picker */
+        }
+#endif
         mMsg_request_main_disappear_wait_type1(msg_p);
         p_sel->strum_timer = 150;
         p_sel->bgm_stop_timer = 80;

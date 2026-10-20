@@ -10,6 +10,12 @@
 #include "libforest/emu64/emu64_wrapper.h"
 #include "sys_matrix.h"
 #ifdef TARGET_PC
+#include "pc_msg.h"
+#define mMsg_PC_IS_CUSTOM(no) PC_MSG_IS_CUSTOM(no)
+#else
+#define mMsg_PC_IS_CUSTOM(no) FALSE
+#endif
+#ifdef TARGET_PC
 #include "pc_bswap.h"
 #endif
 

@@ -122,6 +122,7 @@ static struct {
 
     mNtp_tree_shake_c tree_queue[mNtp_TREE_QUEUE];
     int tree_count;
+    int remote_emote; /* -1 when none pending */
 
     mNtp_door_c remote_door; /* latest door frame from the peer */
     u32 remote_door_frame;
@@ -218,6 +219,7 @@ static void mNtp_set_deposit(int row, u16 bits) {
 /* --- connection events (called from pc_net) --- */
 
 void mNtp_on_connect(void) {
+    l_ntp.remote_emote = -1;
     l_ntp.save_requested = FALSE;
     l_ntp.synced = FALSE;
     l_ntp.have_remote = FALSE;
@@ -471,6 +473,11 @@ void mNtp_on_message(int type, const void* data, uint32_t len) {
                 memcpy(&l_ntp.tree_queue[l_ntp.tree_count++], data, sizeof(mNtp_tree_shake_c));
             }
             break;
+        case PC_NET_MSG_EMOTE:
+            if (len == sizeof(s32)) {
+                l_ntp.remote_emote = *(const s32*)data;
+            }
+            break;
         case PC_NET_MSG_DOOR:
             if (len == sizeof(mNtp_door_c)) {
                 memcpy(&l_ntp.remote_door, data, sizeof(mNtp_door_c));
@@ -516,6 +523,23 @@ int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little) {
     l_ntp.tree_count--;
     memmove(&l_ntp.tree_queue[0], &l_ntp.tree_queue[1], l_ntp.tree_count * sizeof(mNtp_tree_shake_c));
     return TRUE;
+}
+
+/* --- emotes --- */
+
+void mNtp_send_emote(int emote) {
+    s32 m = emote;
+
+    if (g_pc_net_mode != PC_NET_MODE_OFF && l_ntp.synced) {
+        pc_net_send(PC_NET_MSG_EMOTE, &m, sizeof(m));
+    }
+}
+
+int mNtp_pop_emote(void) {
+    int emote = l_ntp.remote_emote;
+
+    l_ntp.remote_emote = -1;
+    return emote;
 }
 
 /* --- doors --- */

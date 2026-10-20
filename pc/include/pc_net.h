@@ -32,9 +32,10 @@ enum {
     PC_NET_MSG_PLAYER_ACK,  /* host -> guest: player data stored */
     PC_NET_MSG_TREE_SHAKE,  /* both: a tree was shaken (visual only) */
     PC_NET_MSG_DOOR,        /* both: a structure's door animation frame (visual only) */
+    PC_NET_MSG_EMOTE,       /* both: the player made a gesture (emote index) */
 };
 
-#define PC_NET_PROTOCOL_VERSION 4
+#define PC_NET_PROTOCOL_VERSION 5
 
 typedef struct {
     int32_t scene_no;

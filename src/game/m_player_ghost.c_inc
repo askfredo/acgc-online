@@ -12,6 +12,8 @@
 extern void mNtp_player_update(GAME* game, const PcNetPlayerState* local);
 extern int mNtp_get_remote(PcNetPlayerState* out);
 extern int mNtp_pop_tree_shake(u16* item, int* ut_x, int* ut_z, int* little);
+extern void mNtp_send_emote(int emote);
+extern int mNtp_pop_emote(void);
 extern void mPlib_PC_Load_FaceTexAndPallet(u8* tex_p, u16* pal_p, int sex, int face);
 extern unsigned int pc_image_base;
 extern unsigned int pc_image_end;
@@ -19,6 +21,33 @@ extern unsigned int pc_image_end;
 #define Player_GHOST_FACE_TEX_SIZE 0xE00
 #define Player_GHOST_HAND_JOINT 20
 #define Player_GHOST_NET_JOINT 3
+
+/* Emotes: D-pad, or L + D-pad for the second set. An icon from the villagers' feelings
+ * pops over the head and, when standing still, the body plays a reaction. */
+typedef struct {
+    s16 effect;
+    s16 anim; /* -1: icon only */
+} Player_emote_c;
+
+static const Player_emote_c l_player_emotes[] = {
+    { eEC_EFFECT_SIAWASE_HANA, mPlayer_ANIM_YATTA1 }, /* up: happy */
+    { eEC_EFFECT_LOVELOVE2, mPlayer_ANIM_YATTA2 },    /* right: love */
+    { eEC_EFFECT_NAKU, mPlayer_ANIM_GAAAN1 },         /* down: cry */
+    { eEC_EFFECT_KANTANHU, mPlayer_ANIM_BIKU1 },      /* left: surprise */
+    { eEC_EFFECT_WARAU, mPlayer_ANIM_YATTA3 },        /* L+up: laugh */
+    { eEC_EFFECT_GIMONHU, -1 },                       /* L+right: question */
+    { eEC_EFFECT_PUN, -1 },                           /* L+down: angry */
+    { eEC_EFFECT_HIRAMEKI_DEN, -1 },                  /* L+left: idea */
+};
+
+#define Player_EMOTE_NUM (int)(sizeof(l_player_emotes) / sizeof(l_player_emotes[0]))
+#define Player_EMOTE_MAX_FRAMES 150
+
+static struct {
+    int anim; /* body reaction playing, -1 when none */
+    int timer;
+    int duration;
+} l_player_emote = { -1, 0, 0 };
 
 typedef struct {
     cKF_SkeletonInfo_R_c keyframe0;
@@ -31,6 +60,8 @@ typedef struct {
     Mtx work_mtx[2][13];
     MtxF right_hand_mtx;
     int hand_valid;
+    xyz_t feel_pos;
+    int feel_valid;
 
     cKF_SkeletonInfo_R_c item_keyframe;
     s_xyz item_joint_data[8];
@@ -94,9 +125,76 @@ static void Player_actor_ghost_shake_trees(ACTOR* actorx, GAME* game) {
     }
 }
 
+static int Player_actor_emote_input(void) {
+    static const u16 dpad[] = { BUTTON_DUP, BUTTON_DRIGHT, BUTTON_DDOWN, BUTTON_DLEFT };
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (chkTrigger(dpad[i])) {
+            return chkButton(BUTTON_L) ? i + 4 : i;
+        }
+    }
+    return -1;
+}
+
+static void Player_actor_emote_set_body(ACTOR* actorx, GAME* game, int anim_idx) {
+    int anim1_idx;
+    int part_table_idx;
+
+    Player_actor_SetupItem_Base1(actorx, anim_idx, -5.0f, &anim1_idx, &part_table_idx);
+    Player_actor_InitAnimation_Base1(actorx, game, anim_idx, anim1_idx, 1.0f, 1.0f, 0.5f, -5.0f, part_table_idx);
+}
+
+static void Player_actor_emote_update(ACTOR* actorx, GAME* game) {
+    PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
+    int main_index = player->now_main_index;
+    int emote;
+
+    if (mEv_IsTitleDemo()) {
+        return;
+    }
+
+    /* Body reaction: only while standing; any other action takes over the animation. */
+    if (l_player_emote.anim >= 0) {
+        if (main_index != mPlayer_INDEX_WAIT || player->animation0_idx != l_player_emote.anim) {
+            l_player_emote.anim = -1;
+        } else if (++l_player_emote.timer >= l_player_emote.duration) {
+            l_player_emote.anim = -1;
+            Player_actor_emote_set_body(actorx, game, mPlayer_ANIM_WAIT1);
+        }
+    }
+
+    if (main_index != mPlayer_INDEX_WAIT && main_index != mPlayer_INDEX_WALK && main_index != mPlayer_INDEX_RUN &&
+        main_index != mPlayer_INDEX_DASH) {
+        return;
+    }
+
+    emote = Player_actor_emote_input();
+    if (emote < 0 || emote >= Player_EMOTE_NUM) {
+        return;
+    }
+
+    player->draw_effect_idx = l_player_emotes[emote].effect + 1; /* spawned at the feel joint in draw */
+    mNtp_send_emote(emote);
+
+    if (main_index == mPlayer_INDEX_WAIT && l_player_emotes[emote].anim >= 0) {
+        cKF_Animation_R_c* anim = mPlib_Get_Pointer_Animation(l_player_emotes[emote].anim);
+
+        Player_actor_emote_set_body(actorx, game, l_player_emotes[emote].anim);
+        l_player_emote.anim = l_player_emotes[emote].anim;
+        l_player_emote.timer = 0;
+        l_player_emote.duration = anim != NULL ? (int)((anim->frames - 1) / 0.5f) : 60;
+        if (l_player_emote.duration > Player_EMOTE_MAX_FRAMES) {
+            l_player_emote.duration = Player_EMOTE_MAX_FRAMES;
+        }
+    }
+}
+
 static void Player_actor_ghost_send_state(ACTOR* actorx, GAME* game) {
     PLAYER_ACTOR* player = (PLAYER_ACTOR*)actorx;
     PcNetPlayerState state;
+
+    Player_actor_emote_update(actorx, game);
 
     if (g_pc_net_mode == PC_NET_MODE_OFF) {
         return;
@@ -196,6 +294,9 @@ static int Player_actor_ghost_draw_After(GAME* game, cKF_SkeletonInfo_R_c* kf, i
     if (joint_no == Player_GHOST_HAND_JOINT) {
         Matrix_get(&ghost->right_hand_mtx);
         ghost->hand_valid = TRUE;
+    } else if (joint_no == mPlayer_JOINT_FEEL) {
+        Matrix_Position_Zero(&ghost->feel_pos);
+        ghost->feel_valid = TRUE;
     }
     return TRUE;
 }
@@ -310,6 +411,7 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     rot.z = 0;
 
     ghost->hand_valid = FALSE;
+    ghost->feel_valid = FALSE;
     Matrix_push();
     Matrix_softcv3_load(&rot, remote.pos[0], remote.pos[1] + actorx->shape_info.ofs_y * actorx->scale.y,
                         remote.pos[2]);
@@ -319,5 +421,14 @@ static void Player_actor_ghost_draw(ACTOR* actorx, GAME* game) {
     Matrix_pull();
 
     Player_actor_ghost_draw_item(ghost, &remote, game);
+
+    {
+        int emote = mNtp_pop_emote();
+
+        if (emote >= 0 && emote < Player_EMOTE_NUM && ghost->feel_valid) {
+            Common_Get(clip).effect_clip->effect_make_proc(l_player_emotes[emote].effect, ghost->feel_pos, 2,
+                                                           remote.angle_y, game, RSV_NO, 0, 0);
+        }
+    }
 }
 #endif

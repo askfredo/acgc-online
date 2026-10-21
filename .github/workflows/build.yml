@@ -30,6 +30,15 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+      - name: Case-only symlink
+        # include/PowerPC_EABI_Support/msl -> Msl: on Windows both names are the same
+        # folder, so the symlink (checked out as a text file) only hides the real one.
+        shell: bash
+        run: |
+          if [ -f include/PowerPC_EABI_Support/msl ]; then
+            rm include/PowerPC_EABI_Support/msl
+            git checkout -- include/PowerPC_EABI_Support/Msl
+          fi
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW32
@@ -76,6 +85,8 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
+          # The runner's 64-bit glib dev packages block their 32-bit twins that SDL2 pulls in.
+          sudo apt-get remove -y libglib2.0-dev libglib2.0-dev-bin || true
           sudo apt-get install -y gcc-multilib g++-multilib cmake libsdl2-dev:i386
       - name: N64 SDK headers
         run: python3 tools/fetch_n64_headers.py

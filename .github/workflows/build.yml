@@ -29,16 +29,20 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
+      - name: No symlinks on checkout
+        shell: bash
+        run: git config --global core.symlinks false
       - uses: actions/checkout@v4
       - name: Case-only symlink
         # include/PowerPC_EABI_Support/msl -> Msl: on Windows both names are the same
         # folder, so the symlink (checked out as a text file) only hides the real one.
         shell: bash
         run: |
-          if [ -f include/PowerPC_EABI_Support/msl ]; then
-            rm include/PowerPC_EABI_Support/msl
+          if [ ! -d include/PowerPC_EABI_Support/Msl/MSL_C ]; then
+            rm -f include/PowerPC_EABI_Support/msl
             git checkout -- include/PowerPC_EABI_Support/Msl
           fi
+          ls include/PowerPC_EABI_Support/Msl/MSL_C/PPC_EABI/cmath_gcn.h
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW32
@@ -87,7 +91,10 @@ jobs:
           sudo apt-get update
           # The runner's 64-bit glib dev packages block their 32-bit twins that SDL2 pulls in.
           sudo apt-get remove -y libglib2.0-dev libglib2.0-dev-bin || true
-          sudo apt-get install -y gcc-multilib g++-multilib cmake libsdl2-dev:i386
+          sudo apt-get install -y gcc-14-multilib g++-14-multilib cmake libsdl2-dev:i386
+          # The decomp's audio code uses std::sinf and friends (libstdc++ 14+).
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
       - name: N64 SDK headers
         run: python3 tools/fetch_n64_headers.py
       - name: Configure

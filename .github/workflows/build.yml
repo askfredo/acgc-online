@@ -83,6 +83,9 @@ jobs:
   linux:
     name: Linux (32-bit)
     runs-on: ubuntu-24.04
+    # Ubuntu's i386 SDL2 packages clash with the runner's 64-bit ones now and then;
+    # don't let that hold back the Windows release.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies

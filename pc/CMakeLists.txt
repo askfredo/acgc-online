@@ -398,6 +398,13 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${SDL2_INCLUDE_DIRS})
+# The SDL2 backend needs SDL itself; linking it here keeps the order right for
+# static linkers (Windows) that resolve libraries left to right.
+if(TARGET SDL2::SDL2)
+    target_link_libraries(imgui PUBLIC SDL2::SDL2)
+else()
+    target_link_libraries(imgui PUBLIC ${SDL2_LIBRARIES})
+endif()
 
 # Rounded font for the world map (SIL Open Font License), copied next to the game
 set(PC_FONT_COMMIT 1866b1b967b78211927c48c9835099c33fb85b3b)

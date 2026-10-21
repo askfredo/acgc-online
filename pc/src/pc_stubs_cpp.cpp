@@ -32,3 +32,9 @@ void JKRHeap::destroy() {}
 JKRTask::Request* JKRTask::searchBlank() {
     return nullptr;
 }
+
+/* JUTRomFont's static font header: declared by the decomp, never defined. Unused on PC
+ * (fonts come from the disc), but the Windows linker still wants the symbol. */
+#include "JSystem/JUtility/JUTFont.h"
+
+OSFontHeader* JUTRomFont::spFontHeader_ = nullptr;
